@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "synqlite"
+version = "0.1.0"
+description = ""
+authors = ["Victorien Elvinger <victorien@elvinger.fr>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+sqlschm = "^0.2.0"
+
+[tool.poetry.dev-dependencies]
+black = "^22.1.0"
+pyright = "^1.1.230"
+pytest = "^7.1.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
