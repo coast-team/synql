@@ -1,38 +1,70 @@
 from sqlschm import sql
-from typing import Iterable
 
+ANY = sql.Type(name="any")
+INTEGER = sql.Type(name="integer")
 
-Symbols = dict[str, sql.Table]
-
-
-def symbols(schema: sql.Schema) -> Symbols:
-    return dict((tbl.name[0], tbl) for tbl in schema.tables)
+ROWID_COL = sql.Column(name="rowid", type=INTEGER, constraints=[])
 
 
 """In SQLite ROWID is the primary key when no primary key is declared"""
-DEFAULT_PRIMARY_KEY = sql.Uniqueness(columns=tuple(["rowid"]), is_primary=True)
+ROWID_PRIMARY_KEY = sql.Uniqueness(
+    indexed=[sql.Indexed(column="rowid")], is_primary=True
+)
+
+
+def is_temp(tbl: sql.Table) -> bool:
+    return tbl.temporary or tbl.name[1:2] == tuple(["temp"])
 
 
 def primary_key(tbl: sql.Table) -> sql.Uniqueness:
-    pks = [
-        pk for pk in tbl.constraints if isinstance(pk, sql.Uniqueness) and pk.is_primary
-    ]
-    if len(pks) != 0:
-        return pks[0]
-    else:
-        return DEFAULT_PRIMARY_KEY
+    pk = tbl.primary_key()
+    if pk is None:
+        pk = ROWID_PRIMARY_KEY
+    return pk
 
 
-def foreign_keys(tbl: sql.Table) -> Iterable[sql.ForeignKey]:
-    return (fk for fk in tbl.constraints if isinstance(fk, sql.ForeignKey))
+def uniqueness(tbl: sql.Table) -> list[sql.Uniqueness]:
+    pk = primary_key(tbl)
+    result = tbl.uniqueness()
+    if pk not in result:
+        result = [pk] + result
+    return result
 
 
 def foreign_column_names(tbl: sql.Table) -> frozenset[str]:
-    return frozenset(col for fk in foreign_keys(tbl) for col in fk.columns)
+    return frozenset(col for fk in tbl.foreign_keys() for col in fk.columns)
 
 
 def is_generated(col: sql.Column) -> bool:
-    return col.autoincrement or col.generated
+    return any(
+        x
+        for x in col.constraints
+        if isinstance(x, sql.Generated)
+        or (
+            isinstance(x, sql.Uniqueness)
+            and (x.autoincrement or is_rowid_alias(col, x))
+        )
+    )
+
+
+def has_rowid_alias(tbl: sql.Table) -> bool:
+    pk = primary_key(tbl)
+    return not tbl.options.without_rowid and any(
+        is_rowid_alias(col, pk) for col in tbl.columns
+    )
+
+
+def is_rowid_alias(col: sql.Column, pk: sql.Uniqueness) -> bool:
+    # INTEGER PRIMARY KEY are aliases of rowid
+    return (
+        col.type.name.lower() == "integer"
+        and len(col.type.params) == 0
+        and len(pk.indexed) == 1
+        and pk.indexed[0].column == col.name
+        # Edge case: INTEGER PRIMARY KEY DESC is not an alias of rowid
+        # See https://www.sqlite.org/lang_createtable.html#rowids_and_the_integer_primary_key
+        and (pk.is_table_constraint or pk.indexed[0].sorting is not sql.Sorting.DESC)
+    )
 
 
 def replicated_columns(tbl: sql.Table) -> list[sql.Column]:
