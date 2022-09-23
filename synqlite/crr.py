@@ -41,7 +41,7 @@ DROP TRIGGER IF EXISTS  _synq_local_clock;
 CREATE TRIGGER          _synq_local_clock
 AFTER UPDATE OF ts ON _synq_local WHEN (OLD.ts + 1 = NEW.ts)
 BEGIN
-	UPDATE _synq_local SET ts = max(NEW.ts, CAST(
+    UPDATE _synq_local SET ts = max(NEW.ts, CAST(
         ((julianday('now') - 2440587.5) * 86400.0 * 1000000.0) AS int
             -- unix epoch in nano-seconds
             -- https://www.sqlite.org/lang_datefunc.html#examples
