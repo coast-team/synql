@@ -64,24 +64,24 @@ CREATE TABLE IF NOT EXISTS _synq_context(
 INSERT OR IGNORE INTO _synq_context SELECT peer, ts FROM _synq_local;
 
 CREATE TABLE IF NOT EXISTS _synq_id(
-    row_peer integer NOT NULL,
     row_ts integer NOT NULL,
+    row_peer integer NOT NULL,
     tbl text NOT NULL,
-    PRIMARY KEY(row_peer, row_ts)
+    PRIMARY KEY(row_ts, row_peer)
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS _synq_log(
-    peer integer NOT NULL,
     ts integer NOT NULL,
-    row_peer integer NOT NULL,
+    peer integer NOT NULL,
     row_ts integer NOT NULL,
+    row_peer integer NOT NULL,
     col integer NOT NULL,
     val any,
     -- index id (for unique keys)
     -- column of a composite key have the same index id
     -- WARNING: interleaved indexes are not supported
     tbl_index integer DEFAULT NULL,
-    PRIMARY KEY(peer, ts)
+    PRIMARY KEY(ts, peer)
 );
 
 DROP TRIGGER IF EXISTS  _synq_log_cleanup;
@@ -91,28 +91,28 @@ AFTER INSERT ON _synq_log
 WHEN (NEW.tbl_index IS NULL AND (SELECT logcleanup FROM _synq_local))
 BEGIN
     -- Delete shadowed entries
-    DELETE FROM _synq_log WHERE (peer <> NEW.peer OR ts <> NEW.ts) AND
-        row_peer = NEW.row_peer AND row_ts = NEW.row_ts AND col = NEW.col;
+    DELETE FROM _synq_log WHERE (ts <> NEW.ts OR peer <> NEW.peer) AND
+        row_ts = NEW.row_ts AND row_peer = NEW.row_peer AND col = NEW.col;
 END;
 
 CREATE TABLE IF NOT EXISTS _synq_fklog(
-    peer integer NOT NULL,
     ts integer NOT NULL,
-    row_peer integer NOT NULL,
+    peer integer NOT NULL,
     row_ts integer NOT NULL,
+    row_peer integer NOT NULL,
     fk_id integer NOT NULL,
     -- ON DELETE/UPDATE action info
     -- 0: CASCADE, 1: NO ACTION, 2: RESTRICT, 3: SET DEFAULT, 4: SET NULL
     on_delete integer NOT NULL CHECK(0 <= on_delete AND on_delete <= 4),
     on_update integer NOT NULL CHECK(0 <= on_delete AND on_delete <= 4),
-    foreign_row_peer integer DEFAULT NULL,
     foreign_row_ts integer DEFAULT NULL,
+    foreign_row_peer integer DEFAULT NULL,
     -- which tbl_index of the foreign row is used?
     foreign_index integer NOT NULL,
     -- allow graph marking
     -- 0: on delete mark, 1: on update mark
     mark integer DEFAULT NULL,
-    PRIMARY KEY(peer, ts)
+    PRIMARY KEY(ts, peer)
 );
 
 DROP TRIGGER IF EXISTS  _synq_fklog_cleanup;
@@ -120,17 +120,17 @@ CREATE TRIGGER          _synq_fklog_cleanup
 AFTER INSERT ON _synq_fklog WHEN (SELECT logcleanup FROM _synq_local)
 BEGIN
     -- Delete shadowed entries
-    DELETE FROM _synq_fklog WHERE (peer <> NEW.peer OR ts <> NEW.ts) AND
-        row_peer = NEW.row_peer AND row_ts = NEW.row_ts AND fk_id = NEW.fk_id;
+    DELETE FROM _synq_fklog WHERE (ts <> NEW.ts OR peer <> NEW.peer) AND
+        row_ts = NEW.row_ts AND row_peer = NEW.row_peer AND fk_id = NEW.fk_id;
 END;
 
 CREATE TABLE IF NOT EXISTS _synq_undolog(
-    peer integer NOT NULL,
     ts integer NOT NULL,
-    obj_peer integer NOT NULL,
+    peer integer NOT NULL,
     obj_ts integer NOT NULL,
+    obj_peer integer NOT NULL,
     ul integer NOT NULL DEFAULT 0 CHECK(ul >= 0), -- undo length
-    PRIMARY KEY(peer, ts)
+    PRIMARY KEY(ts, peer)
 ) WITHOUT ROWID;
 
 DROP TRIGGER IF EXISTS  _synq_undolog_cleanup;
@@ -138,33 +138,33 @@ CREATE TRIGGER          _synq_undolog_cleanup
 AFTER INSERT ON _synq_undolog WHEN (SELECT (logcleanup OR undocleanup) FROM _synq_local)
 BEGIN
     -- Delete shadowed entries
-    DELETE FROM _synq_undolog WHERE (peer <> NEW.peer OR ts <> NEW.ts) AND
-        obj_peer = NEW.obj_peer AND obj_ts = NEW.obj_ts AND ul <= NEW.ul;
+    DELETE FROM _synq_undolog WHERE (ts <> NEW.ts OR peer <> NEW.peer) AND
+        obj_ts = NEW.obj_ts AND obj_peer = NEW.obj_peer AND ul <= NEW.ul;
 END;
 
 DROP VIEW IF EXISTS _synq_log_active;
 CREATE VIEW         _synq_log_active AS
-SELECT log.rowid, log.* FROM _synq_log  AS log
+SELECT log.rowid, log.* FROM _synq_log AS log
     WHERE NOT EXISTS(
         -- do not take undone log entries and rows into account
         SELECT 1 FROM _synq_undolog AS undo
-        WHERE (undo.obj_peer = log.peer AND undo.obj_ts = log.ts) OR
-            (undo.obj_peer = log.row_peer AND undo.obj_ts = log.row_ts)
-        GROUP BY undo.obj_peer, undo.obj_ts HAVING max(undo.ul)%2 = 1
+        WHERE (undo.obj_ts = log.ts AND undo.obj_peer = log.peer) OR
+            (undo.obj_ts = log.row_ts AND undo.obj_peer = log.row_peer)
+        GROUP BY undo.obj_ts, undo.obj_peer HAVING max(undo.ul)%2 = 1
     )
-    GROUP BY row_peer, row_ts, col HAVING ts = max(ts);
+    GROUP BY row_ts, row_peer, col HAVING ts = max(ts);
 
 DROP VIEW IF EXISTS _synq_fklog_active;
 CREATE VIEW         _synq_fklog_active AS
-SELECT log.rowid, log.* FROM _synq_fklog  AS log
+SELECT log.rowid, log.* FROM _synq_fklog AS log
     WHERE NOT EXISTS(
         -- do not take undone log entries and rows into account
         SELECT 1 FROM _synq_undolog AS undo
-        WHERE (undo.obj_peer = log.peer AND undo.obj_ts = log.ts) OR
-            (undo.obj_peer = log.row_peer AND undo.obj_ts = log.row_ts)
-        GROUP BY undo.obj_peer, undo.obj_ts HAVING max(undo.ul)%2 = 1
+        WHERE (undo.obj_ts = log.ts AND undo.obj_peer = log.peer) OR
+            (undo.obj_ts = log.row_ts AND undo.obj_peer = log.row_peer)
+        GROUP BY undo.obj_ts, undo.obj_peer HAVING max(undo.ul)%2 = 1
     )
-    GROUP BY row_peer, row_ts, fk_id HAVING ts = max(ts);
+    GROUP BY row_ts, row_peer, fk_id HAVING ts = max(ts);
 
 DROP TRIGGER IF EXISTS  _synq_fklog_active_insert;
 CREATE TRIGGER          _synq_fklog_active_insert
@@ -175,11 +175,11 @@ BEGIN
     UPDATE _synq_local SET ts = ts + 1;
 
     INSERT INTO _synq_fklog(
-        peer, ts, row_peer, row_ts, fk_id,
-        on_delete, on_update, foreign_row_peer, foreign_row_ts,
+        ts, peer, row_ts, row_peer, fk_id,
+        on_delete, on_update, foreign_row_ts, foreign_row_peer,
         foreign_index, mark
-    ) SELECT local.peer, local.ts, NEW.row_peer, NEW.row_ts, NEW.fk_id,
-        NEW.on_delete, NEW.on_update, NEW.foreign_row_peer, NEW.foreign_row_ts,
+    ) SELECT local.ts, local.peer, NEW.row_ts, NEW.row_peer, NEW.fk_id,
+        NEW.on_delete, NEW.on_update, NEW.foreign_row_ts, NEW.foreign_row_peer,
         NEW.foreign_index, NEW.mark
     FROM _synq_local AS local;
 END;
@@ -188,7 +188,7 @@ DROP VIEW IF EXISTS _synq_undolog_active;
 CREATE VIEW         _synq_undolog_active AS
 SELECT undo.* FROM _synq_undolog AS undo WHERE NOT EXISTS(
     SELECT 1 FROM _synq_undolog AS undo2
-    WHERE undo.obj_peer = undo2.obj_peer AND undo.obj_ts = undo2.obj_ts AND
+    WHERE undo.obj_ts = undo2.obj_ts AND undo.obj_peer = undo2.obj_peer AND
         undo2.ul > undo.ul
 );
 
@@ -208,10 +208,10 @@ INSTEAD OF INSERT ON _synq_undolog_active WHEN (
 BEGIN
     UPDATE _synq_local SET ts = ts + 1;
 
-    INSERT INTO _synq_undolog
-    SELECT local.peer, local.ts, NEW.obj_peer, NEW.obj_ts, 1 + ifnull((
+    INSERT INTO _synq_undolog(ts, peer, obj_ts, obj_peer, ul)
+    SELECT local.ts, local.peer, NEW.obj_ts, NEW.obj_peer, 1 + ifnull((
             SELECT max(ul) FROM _synq_undolog
-            WHERE obj_peer = NEW.obj_peer AND obj_ts = NEW.obj_ts
+            WHERE obj_ts = NEW.obj_ts AND obj_peer = NEW.obj_peer
         ), 0) FROM _synq_local AS local;
 END;
 
@@ -224,7 +224,7 @@ AFTER UPDATE OF mark ON _synq_fklog WHEN (
 )
 BEGIN
     UPDATE _synq_fklog SET mark = 0
-    WHERE foreign_row_peer = OLD.row_peer AND foreign_row_ts = OLD.row_ts;
+    WHERE foreign_row_ts = OLD.row_ts AND foreign_row_peer = OLD.row_peer;
 END;
 
 DROP TRIGGER IF EXISTS  _synq_fklog_on_delete_restrict_marking;
@@ -232,7 +232,7 @@ CREATE TRIGGER          _synq_fklog_on_delete_restrict_marking
 AFTER UPDATE OF mark ON _synq_fklog WHEN (OLD.mark <> 1 AND NEW.mark = 1)
 BEGIN
     UPDATE _synq_fklog SET mark = 1
-    WHERE row_peer = OLD.foreign_row_peer AND row_ts = OLD.foreign_row_ts AND
+    WHERE row_ts = OLD.foreign_row_ts AND row_peer = OLD.foreign_row_peer AND
         mark = OLD.mark;
 END;
 """
@@ -270,9 +270,9 @@ def _synq_triggers_for(tbl: sql.Table, symbols: sql.Symbols) -> str:
     table_synq_id = f"""
     CREATE TABLE IF NOT EXISTS "_synq_id_{tbl_name}"(
         {maybe_rowid_alias}
-        row_peer integer NOT NULL,
         row_ts integer NOT NULL,
-        UNIQUE (row_peer, row_ts)
+        row_peer integer NOT NULL,
+        UNIQUE(row_ts, row_peer)
     );
 
     DROP TRIGGER IF EXISTS "_synq_id_update_{tbl_name}_pk_";
@@ -296,8 +296,8 @@ def _synq_triggers_for(tbl: sql.Table, symbols: sql.Symbols) -> str:
     AFTER DELETE ON "_synq_id_{tbl_name}"
     WHEN (SELECT NOT is_merging FROM _synq_local)
     BEGIN
-        INSERT INTO _synq_undolog_active(obj_peer, obj_ts)
-        VALUES(OLD.row_peer, OLD.row_ts);
+        INSERT INTO _synq_undolog_active(obj_ts, obj_peer)
+        VALUES(OLD.row_ts, OLD.row_peer);
     END;
     """
     triggers = ""
@@ -312,8 +312,8 @@ def _synq_triggers_for(tbl: sql.Table, symbols: sql.Symbols) -> str:
         insertions += f"""
         UPDATE _synq_local SET ts = ts + 1; -- triggers clock update
 
-        INSERT INTO _synq_log(peer, ts, row_peer, row_ts, col, val, tbl_index)
-        SELECT local.peer, local.ts + i + 1, cur.row_peer, cur.row_ts, {i}, NEW."{col.name}", {tbl_index}
+        INSERT INTO _synq_log(ts, peer, row_ts, row_peer, col, val, tbl_index)
+        SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, {i}, NEW."{col.name}", {tbl_index}
         FROM _synq_local AS local, (
             SELECT * FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid
         ) AS cur;
@@ -344,12 +344,12 @@ def _synq_triggers_for(tbl: sql.Table, symbols: sql.Symbols) -> str:
 
             -- handle case where at least one col is NULL
             INSERT INTO _synq_fklog(
-                peer, ts, row_peer, row_ts, fk_id,
+                ts, peer, row_ts, row_peer, fk_id,
                 on_delete, on_update,
                 foreign_index
             )
             SELECT
-                local.peer, local.ts, cur.row_peer, cur.row_ts, {fk_id},
+                local.ts, local.peer, cur.row_ts, cur.row_peer, {fk_id},
                 {FK_ACTION[fk.on_delete]}, {FK_ACTION[fk.on_update]},
                 {foreign_index}
             FROM _synq_local AS local, (
@@ -357,16 +357,16 @@ def _synq_triggers_for(tbl: sql.Table, symbols: sql.Symbols) -> str:
             ) AS cur;
 
             UPDATE _synq_fklog SET
-                foreign_row_peer = target.row_peer,
-                foreign_row_ts = target.row_ts
+                foreign_row_ts = target.row_ts,
+                foreign_row_peer = target.row_peer
             FROM _synq_local AS local, (
-                SELECT row_peer, row_ts FROM "_synq_id_{foreign_tbl_name}"
+                SELECT row_ts, row_peer FROM "_synq_id_{foreign_tbl_name}"
                 WHERE rowid = (
                     SELECT rowid FROM "{foreign_tbl_name}"
                     WHERE {new_referred_match}
                 )
             ) AS target
-            WHERE _synq_fklog.peer = local.peer AND _synq_fklog.ts = local.ts;
+            WHERE _synq_fklog.ts = local.ts AND _synq_fklog.peer = local.peer;
         """.rstrip()
         fk_insertions += fk_insertion
         triggers += f"""
@@ -392,11 +392,11 @@ def _synq_triggers_for(tbl: sql.Table, symbols: sql.Symbols) -> str:
 
         UPDATE _synq_local SET ts = ts + 1; -- triggers clock update
 
-        INSERT INTO "_synq_id_{tbl_name}"(rowid, row_peer, row_ts)
-        SELECT NEW.rowid, peer, ts FROM _synq_local;
+        INSERT INTO "_synq_id_{tbl_name}"(rowid, row_ts, row_peer)
+        SELECT NEW.rowid, ts, peer FROM _synq_local;
 
-        INSERT INTO _synq_id(row_peer, row_ts, tbl)
-        SELECT peer, ts, '{tbl_name}' FROM _synq_local;
+        INSERT INTO _synq_id(row_ts, row_peer, tbl)
+        SELECT ts, peer, '{tbl_name}' FROM _synq_local;
         {insertions}
         {fk_insertions}
     END;
@@ -416,8 +416,8 @@ def _synq_triggers_for(tbl: sql.Table, symbols: sql.Symbols) -> str:
     BEGIN
         UPDATE _synq_local SET ts = ts + 1; -- triggers clock update
 
-        INSERT INTO _synq_log(peer, ts, row_peer, row_ts, col, val, tbl_index)
-        SELECT local.peer, local.ts, cur.row_peer, cur.row_ts, {i}, NEW."{col.name}", {tbl_index}
+        INSERT INTO _synq_log(ts, peer, row_ts, row_peer, col, val, tbl_index)
+        SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, {i}, NEW."{col.name}", {tbl_index}
         FROM _synq_local AS local, (
             SELECT * FROM "_synq_id_{tbl_name}"
             -- we match against new and old because rowid may be updated.
@@ -495,22 +495,22 @@ SELECT peer, 0 FROM extern._synq_context;
 INSERT INTO main._synq_id
 SELECT ext_id.*
 FROM extern._synq_id AS ext_id JOIN main._synq_context AS ctx
-    ON ext_id.row_peer = ctx.peer AND ext_id.row_ts > ctx.ts;
+    ON ext_id.row_ts > ctx.ts AND ext_id.row_peer = ctx.peer;
 
 INSERT INTO main._synq_log
 SELECT log.*
 FROM extern._synq_log AS log JOIN main._synq_context AS ctx
-    ON log.peer = ctx.peer AND log.ts > ctx.ts;
+    ON log.ts > ctx.ts AND log.peer = ctx.peer;
 
 INSERT INTO main._synq_fklog
 SELECT log.*
 FROM extern._synq_fklog AS log JOIN main._synq_context AS ctx
-    ON log.peer = ctx.peer AND log.ts > ctx.ts;
+    ON log.ts > ctx.ts AND log.peer = ctx.peer;
 
 INSERT INTO main._synq_undolog
 SELECT log.*
 FROM extern._synq_undolog AS log JOIN main._synq_context AS ctx
-    ON log.peer = ctx.peer AND log.ts > ctx.ts;
+    ON log.ts > ctx.ts AND log.peer = ctx.peer;
 
 -- Conflict resolution
 
@@ -525,11 +525,11 @@ UPDATE main._synq_fklog SET mark = 0
 FROM main._synq_context AS ctx, extern._synq_context AS ectx,
     _synq_undolog_active_undo AS undo
 WHERE (
-    (undo.peer = ctx.peer AND undo.ts > ctx.ts) OR
-    (undo.peer = ectx.peer AND undo.ts > ectx.ts)
+    (undo.ts > ctx.ts AND undo.peer = ctx.peer) OR
+    (undo.ts > ectx.ts AND undo.peer = ectx.peer)
 ) AND (
-    undo.obj_peer = main._synq_fklog.foreign_row_peer AND
-    undo.obj_ts = main._synq_fklog.foreign_row_ts
+    undo.obj_ts = main._synq_fklog.foreign_row_ts AND
+    undo.obj_peer = main._synq_fklog.foreign_row_peer
 );
 
 -- A.2. mark rows that are (directly/transitively) referenced by a
@@ -538,11 +538,11 @@ UPDATE main._synq_fklog SET mark = 1
 WHERE mark = 0 AND (on_delete = 1 OR on_delete = 2);
 
 -- A.3. redo rows referenced by marked rows if undone
-INSERT INTO _synq_undolog_active(obj_peer, obj_ts)
-SELECT undo.obj_peer, undo.obj_ts
+INSERT INTO _synq_undolog_active(obj_ts, obj_peer)
+SELECT undo.obj_ts, undo.obj_peer
 FROM _synq_undolog_active_undo AS undo JOIN _synq_fklog AS fk ON
-    undo.obj_peer = fk.foreign_row_peer AND
-    undo.obj_ts = fk.foreign_row_ts
+    undo.obj_ts = fk.foreign_row_ts AND
+    undo.obj_peer = fk.foreign_row_peer
 WHERE fk.mark = 1;
 
 -- A.4. un-mark remaining rows
@@ -555,22 +555,22 @@ INSERT INTO main._synq_undolog_active(obj_peer, obj_ts)
 SELECT log.peer, log.ts
 FROM main._synq_log_active AS log JOIN
     main._synq_fklog AS fk ON
-        log.row_peer = fk.foreign_row_peer AND
         log.row_ts = fk.foreign_row_ts AND
+        log.row_peer = fk.foreign_row_peer AND
         log.tbl_index = fk.foreign_index AND
         log.ts > fk.ts
 WHERE fk.on_update = 1 OR fk.on_update = 2;
 
 -- B.2.. ON UPDATE SET NULL
 INSERT INTO main._synq_fklog_active(
-    row_peer, row_ts, fk_id,
+    row_ts, row_peer, fk_id,
     on_delete, on_update, foreign_index
 ) SELECT
-    fklog.row_peer, fklog.row_ts, fklog.fk_id,
+    fklog.row_ts, fklog.row_peer, fklog.fk_id,
     fklog.on_delete, fklog.on_update, fklog.foreign_index
 FROM main._synq_log_active AS log JOIN main._synq_fklog AS fklog ON
-    log.row_peer = fklog.foreign_row_peer AND
     log.row_ts = fklog.foreign_row_ts AND
+    log.row_peer = fklog.foreign_row_peer AND
     log.tbl_index = fklog.foreign_index AND
     log.ts > fklog.ts
 WHERE fklog.on_update = 4;
@@ -578,20 +578,20 @@ WHERE fklog.on_update = 4;
 -- C. resolve uniqueness conflicts
 
 -- undo latest rows with conflicting unique keys
-INSERT INTO main._synq_undolog_active(obj_peer, obj_ts)
-SELECT DISTINCT log.row_peer, log.row_ts
+INSERT INTO main._synq_undolog_active(obj_ts, obj_peer)
+SELECT DISTINCT log.row_ts, log.row_peer
 FROM
     main._synq_log_active AS log
-    JOIN main._synq_id AS id USING(row_peer, row_ts)
+    JOIN main._synq_id AS id USING(row_ts, row_peer)
     JOIN (
         SELECT * FROM main._synq_log_active AS log
-            JOIN _synq_id AS id USING(row_peer, row_ts)
+            JOIN _synq_id AS id USING(row_ts, row_peer)
     ) AS self USING(tbl, col, tbl_index, val)
 WHERE log.row_ts > self.row_ts AND tbl_index IS NOT NULL
-GROUP BY log.row_peer, log.row_ts, self.row_peer, self.row_ts
+GROUP BY log.row_ts, log.row_peer, self.row_ts, self.row_peer
 HAVING count(*) >= (
     SELECT count(*) FROM _synq_log_active
-    WHERE row_peer = log.row_peer AND row_ts = log.row_ts AND tbl_index = log.tbl_index
+    WHERE row_ts = log.row_ts AND row_peer = log.row_peer AND tbl_index = log.tbl_index
 );
 
 -- D. ON DELETE CASCADE / SET NULL
@@ -602,29 +602,29 @@ UPDATE main._synq_fklog SET mark = 0
 FROM main._synq_context AS ctx, extern._synq_context AS ectx,
     _synq_undolog_active_undo AS undo
 WHERE ((
-        main._synq_fklog.peer = ctx.peer AND
-        main._synq_fklog.ts > ctx.ts
+        main._synq_fklog.ts > ctx.ts AND
+        main._synq_fklog.peer = ctx.peer
     ) OR (
-        main._synq_fklog.peer = ectx.peer AND
-        main._synq_fklog.ts > ectx.ts
+        main._synq_fklog.ts > ectx.ts AND
+        main._synq_fklog.peer = ectx.peer
 )) AND (
-        undo.obj_peer = main._synq_fklog.foreign_row_peer AND
-    undo.obj_ts = main._synq_fklog.foreign_row_ts
+    undo.obj_ts = main._synq_fklog.foreign_row_ts AND
+    undo.obj_peer = main._synq_fklog.foreign_row_peer
 );
 
 -- D.2. ON DELETE CASCADE
-INSERT INTO main._synq_undolog_active(obj_peer, obj_ts)
-SELECT row_peer, row_ts
+INSERT INTO main._synq_undolog_active(obj_ts, obj_peer)
+SELECT row_ts, row_peer
 FROM main._synq_fklog
 WHERE mark = 0 AND on_delete <> 4; -- except SET NULL
 
 -- D.3. ON DELETE SET NULL
 INSERT INTO main._synq_fklog_active(
-    row_peer, row_ts, fk_id,
+    row_ts, row_peer, fk_id,
     on_delete, on_update, foreign_index
 )
 SELECT
-    log.row_peer, log.row_ts, log.fk_id,
+    log.row_ts, log.row_peer, log.fk_id,
     log.on_delete, log.on_update, log.foreign_index
 FROM main._synq_fklog AS log
 WHERE mark = 0 AND on_delete = 4; -- only SET NULL
@@ -638,7 +638,7 @@ UPDATE _synq_fklog SET mark = NULL WHERE mark IS NOT NULL;
 -- Update context
 UPDATE main._synq_context SET ts = ctx.ts
 FROM extern._synq_context AS ctx
-WHERE peer = ctx.peer AND ctx.ts > ts;
+WHERE ctx.ts > ts AND peer = ctx.peer;
 """
 
 
@@ -654,7 +654,7 @@ def _create_merge(symbols: sql.Symbols) -> str:
             col_names += col_name
             selectors += f'''(
                 SELECT log.val FROM main._synq_log_active AS log
-                WHERE log.row_peer = id.row_peer AND log.row_ts = id.row_ts AND
+                WHERE  log.row_ts = id.row_ts ANDlog.row_peer = id.row_peer AND
                     log.col = {i}
             ) AS "{col_name}"'''
         for fk_id, fk in enumerate(tbl.foreign_keys()):
@@ -675,10 +675,10 @@ def _create_merge(symbols: sql.Symbols) -> str:
                 selectors += f'''(
                     SELECT rowid FROM main."_synq_id_{f_tbl_name}" AS rw
                         JOIN main._syn_fklog_active AS fklog
-                            ON rw.row_peer = fklog.foreign_row_peer AND
-                                rw.row_ts = fklog.foreign_row_ts
-                    WHERE fklog.row_peer = id.row_peer AND
-                        fklog.row_ts = id.row_ts AND
+                            ON rw.row_ts = fklog.foreign_row_ts AND
+                                rw.row_peer = fklog.foreign_row_peer
+                    WHERE fklog.row_ts = id.row_ts AND
+                        fklog.row_peer = id.row_peer AND
                         fklog.fk_id = {fk_id}
                 ) AS "{fk.columns[0]}"'''
             else:
@@ -693,10 +693,10 @@ def _create_merge(symbols: sql.Symbols) -> str:
                         WHERE log.rowid IN (
                             SELECT log.rowid FROM main._synq_log_active AS log
                                 JOIN main._synq_fklog_active AS fklog
-                                    ON log.row_peer = fklog.foreign_row_peer AND
-                                        log.row_ts = fklog.foreign_row_ts
-                            WHERE fklog.row_peer = id.row_peer AND
-                                fklog.row_ts = id.row_ts AND
+                                    ON log.row_ts = fklog.foreign_row_ts AND
+                                    log.row_peer = fklog.foreign_row_peer
+                            WHERE fklog.row_ts = id.row_ts AND
+                                fklog.row_peer = id.row_peer AND
                                 fklog.fk_id = {fk_id} AND log.col = {j}
                         )
                     ) AS "{col_name}"'''
@@ -705,9 +705,9 @@ def _create_merge(symbols: sql.Symbols) -> str:
             SELECT DISTINCT id.rowid, id.row_peer, id.row_ts
             FROM main._synq_log_active AS log
                 JOIN _synq_context AS ctx
-                    ON log.peer = ctx.peer AND log.ts > ctx.ts
+                    ON log.ts > ctx.ts AND log.peer = ctx.peer
                 JOIN main."_synq_id_{tbl_name}" AS id
-                    ON log.row_peer = id.row_peer AND log.row_ts = id.row_ts
+                    ON log.row_ts = id.row_ts AND log.row_peer = id.row_peer
         ) AS id;
         """
         result += f"""
@@ -717,13 +717,13 @@ def _create_merge(symbols: sql.Symbols) -> str:
         DELETE FROM main."{tbl_name}" WHERE rowid IN (
             SELECT id.rowid FROM main."_synq_id_{tbl_name}" AS id
                 JOIN main._synq_undolog_active_undo AS undo
-                    ON id.row_peer = undo.obj_peer AND id.row_ts = undo.obj_ts
+                    ON id.row_ts = undo.obj_ts AND id.row_peer = undo.obj_peer
         );
 
         DELETE FROM main."_synq_id_{tbl_name}" WHERE rowid IN (
             SELECT id.rowid FROM main."_synq_id_{tbl_name}" AS id
                 JOIN main._synq_undolog_active_undo AS undo
-                    ON id.row_peer = undo.obj_peer AND id.row_ts = undo.obj_ts
+                    ON id.row_ts = undo.obj_ts AND id.row_peer = undo.obj_peer
         );
 
         -- Delete updated rows and redone rows
@@ -731,39 +731,39 @@ def _create_merge(symbols: sql.Symbols) -> str:
         DELETE FROM main."{tbl_name}" WHERE rowid IN (
             SELECT id.rowid FROM main._synq_context AS ctx
                 JOIN main._synq_log_active AS log
-                    ON log.peer = ctx.peer AND log.ts > ctx.ts
+                    ON log.ts > ctx.ts AND log.peer = ctx.peer 
                 JOIN main."_synq_id_{tbl_name}" AS id
-                    ON id.row_peer = log.row_peer AND id.row_ts = log.row_ts
+                    ON id.row_ts = log.row_ts AND id.row_peer = log.row_peer
             UNION SELECT id.rowid FROM main._synq_context AS ctx
                 JOIN main._synq_fklog_active AS fklog
-                    ON fklog.peer = ctx.peer AND fklog.ts > ctx.ts
+                    ON fklog.ts > ctx.ts AND fklog.peer = ctx.peer
                 JOIN main."_synq_id_{tbl_name}" AS id
-                    ON id.row_peer = fklog.row_peer AND id.row_ts = fklog.row_ts
+                    ON id.row_ts = fklog.row_ts AND id.row_peer = fklog.row_peer
             UNION SELECT id.rowid FROM main._synq_context AS ctx
                 JOIN main._synq_undolog_active_redo AS redo
-                    ON redo.peer = ctx.peer AND redo.ts > ctx.ts
+                    ON redo.ts > ctx.ts AND redo.peer = ctx.peer
                 JOIN main."_synq_id_{tbl_name}" AS id
-                    ON id.row_peer = redo.obj_peer AND id.row_ts = redo.obj_ts
+                    ON id.row_ts = redo.obj_ts AND id.row_peer = redo.obj_peer
         );
  
         -- Auto-assign local rowids for new active rows
         INSERT INTO main."_synq_id_{tbl_name}"(row_peer, row_ts)
         SELECT id.row_peer, id.row_ts
         FROM main._synq_id AS id JOIN main._synq_context AS ctx
-            ON id.row_peer = ctx.peer AND id.row_ts > ctx.ts
+            ON id.row_ts > ctx.ts AND id.row_peer = ctx.peer
         WHERE id.tbl = '{tbl_name}' AND NOT EXISTS(
             SELECT 1 FROM main._synq_undolog_active_undo AS undo
-            WHERE undo.obj_peer = id.row_peer AND undo.obj_ts = id.row_ts
+            WHERE undo.obj_ts = id.row_ts AND undo.obj_peer = id.row_peer
         );
 
         -- Auto-assign local rowids for redone rows
-        INSERT OR IGNORE INTO main."_synq_id_{tbl_name}"(row_peer, row_ts)
-        SELECT id.row_peer, id.row_ts
+        INSERT OR IGNORE INTO main."_synq_id_{tbl_name}"(row_ts, row_peer)
+        SELECT id.row_ts id.row_peer
         FROM main._synq_undolog_active_redo AS redo
             JOIN main._synq_context AS ctx
-                ON redo.peer = ctx.peer AND redo.ts > ctx.ts
+                ON redo.ts > ctx.ts AND redo.peer = ctx.peer
             JOIN main._synq_id AS id
-                ON redo.obj_peer = id.row_peer AND redo.obj_ts = id.row_ts
+                ON redo.obj_ts = id.row_ts AND redo.obj_peer = id.row_peer
                     AND id.tbl = '{tbl_name}';
         """
     result += merger
