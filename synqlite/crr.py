@@ -1,9 +1,9 @@
-import sqlite3
 from sqlschm.parser import parse_schema
 from sqlschm import sql
 from contextlib import closing
 import logging
 import textwrap
+import sqlite3
 from synqlite import sqlschm_utils as utils
 
 logging.basicConfig(level=logging.DEBUG)
@@ -19,7 +19,7 @@ FK_ACTION = {
 
 
 _SELECT_AR_TABLE_SCHEMA = """--sql
-SELECT sql FROM sqlite_schema WHERE type = 'table' AND
+SELECT sql FROM sqlite_master WHERE type = 'table' AND
     name NOT LIKE 'sqlite_%' AND name NOT LIKE '_synq_%';
 """
 
@@ -238,7 +238,7 @@ END;
 """
 
 
-def _synq_triggers_for(tbl: sql.Table, symbols: sql.Symbols) -> str:
+def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols) -> str:
     # FIXME: We do not support schema where:
     # - tables that reuse the name rowid
     # - without rowid tables (that's fine)
@@ -321,7 +321,7 @@ def _synq_triggers_for(tbl: sql.Table, symbols: sql.Symbols) -> str:
     fk_insertions = ""
     for fk_id, fk in enumerate(tbl.foreign_keys()):
         foreign_tbl_name = fk.foreign_table.name[0]
-        foreign_tbl = symbols.get(foreign_tbl_name)
+        foreign_tbl = tables.get(foreign_tbl_name)
         assert foreign_tbl is not None
         referred_cols = list(
             fk.referred_columns
@@ -428,10 +428,10 @@ def _synq_triggers_for(tbl: sql.Table, symbols: sql.Symbols) -> str:
     return textwrap.dedent(table_synq_id) + textwrap.dedent(triggers)
 
 
-def _synq_script_for(symbols: sql.Symbols) -> str:
+def _synq_script_for(tables: sql.Symbols) -> str:
     return "".join(
-        _synq_triggers_for(tbl, symbols)
-        for tbl in symbols.values()
+        _synq_triggers_for(tbl, tables)
+        for tbl in tables.values()
         if not utils.is_temp(tbl)
     ).strip()
 
@@ -443,25 +443,26 @@ def _get_schema(db: sqlite3.Connection) -> str:
     return result
 
 
-class Crr:
-    db: sqlite3.Connection
-    symbols: sql.Symbols
+def init(db: sqlite3.Connection) -> None:
+    sql_ar_schema = _get_schema(db)
+    tables = sql.symbols(parse_schema(sql_ar_schema))
+    with closing(db.cursor()) as cursor:
+        cursor.executescript(_CREATE_TABLES)
+        cursor.executescript(_synq_script_for(tables))
 
-    def __init__(self, db_path: str) -> None:
-        self.db = sqlite3.connect(db_path, check_same_thread=False)
-        sql_ar_schema = _get_schema(self.db)
-        self.symbols = sql.symbols(parse_schema(sql_ar_schema))
-        print(_CREATE_TABLES)
-        print(_synq_script_for(self.symbols))
-        # self.db.executescript(_CREATE_TABLES).close()
-        # self.db.executescript(script_for(self.schema)).close()
 
-    def __del__(self) -> None:
-        self.db.close()
+def clone_to(src: sqlite3.Connection, target: sqlite3.Connection) -> None:
+    src.backup(target)
+    with closing(target.cursor()) as cursor:
+        cursor.execute("DELETE FROM _synq_local")
+        cursor.execute("INSERT OR IGNORE INTO _synq_local DEFAULT VALUES;")
 
-    def merge(self, remote_db_path: str):
-        merging = _create_merge(self.symbols)
-        result = f"""
+
+def pull_from(db: sqlite3.Connection, remote_db_path: str) -> str:
+    sql_ar_schema = _get_schema(db)
+    tables = sql.symbols(parse_schema(sql_ar_schema))
+    merging = _create_pull(tables)
+    result = f"""
         BEGIN
             PRAGMA defer_foreign_keys = ON;
             PRAGMA ignore_check_constraints = ON;
@@ -481,9 +482,9 @@ class Crr:
             PRAGMA ignore_check_constraints = OFF;
             PRAGMA defer_foreign_keys = OFF;
             PRAGMA recursive_triggers = OFF;
-        COMMIT
+        COMMIT;
         """
-        return textwrap.dedent(result)
+    return textwrap.dedent(result)
 
 
 _MERGE_PREPARATION = """
@@ -642,10 +643,10 @@ WHERE ctx.ts > ts AND peer = ctx.peer;
 """
 
 
-def _create_merge(symbols: sql.Symbols) -> str:
+def _create_pull(tables: sql.Symbols) -> str:
     result = ""
     merger = ""
-    for tbl in symbols.values():
+    for tbl in tables.values():
         tbl_name = tbl.name[0]
         repl_col_names = map(lambda col: col.name, utils.replicated_columns(tbl))
         selectors: list[str] = []
@@ -659,7 +660,7 @@ def _create_merge(symbols: sql.Symbols) -> str:
             ) AS "{col_name}"'''
         for fk_id, fk in enumerate(tbl.foreign_keys()):
             f_tbl_name = fk.foreign_table.name[0]
-            f_tbl = symbols.get(f_tbl_name)
+            f_tbl = tables.get(f_tbl_name)
             assert f_tbl is not None
             f_repl_col_names = list(
                 map(lambda col: col.name, utils.replicated_columns(tbl))
@@ -768,8 +769,3 @@ def _create_merge(symbols: sql.Symbols) -> str:
         """
     result += merger
     return result
-
-
-if __name__ == "__main__":
-    crr = Crr("./ref.sqlite3")
-    # print(_create_incremental_schema(crr.schema, sql.symbols(crr.schema)))
