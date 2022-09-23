@@ -86,7 +86,9 @@ CREATE TABLE IF NOT EXISTS _synq_log(
 
 DROP TRIGGER IF EXISTS  _synq_log_cleanup;
 CREATE TRIGGER          _synq_log_cleanup
-AFTER INSERT ON _synq_log WHEN (SELECT logcleanup FROM _synq_local)
+AFTER INSERT ON _synq_log
+-- Do not cleanup updates of indexes (they could be undone)
+WHEN (NEW.tbl_index IS NULL AND (SELECT logcleanup FROM _synq_local))
 BEGIN
     -- Delete shadowed entries
     DELETE FROM _synq_log WHERE (peer <> NEW.peer OR ts <> NEW.ts) AND
