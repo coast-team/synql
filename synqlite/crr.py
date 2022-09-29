@@ -475,33 +475,33 @@ def clone_to(
     _allocate_id(target, id=id, ts=ts)
 
 
-def pull_from(db: sqlite3.Connection, remote_db_path: str) -> str:
+def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str) -> None:
     sql_ar_schema = _get_schema(db)
     tables = sql.symbols(parse_schema(sql_ar_schema))
     merging = _create_pull(tables)
+    print(merging)
     result = f"""
-        BEGIN
-            PRAGMA defer_foreign_keys = ON;
-            PRAGMA ignore_check_constraints = ON;
-            PRAGMA recursive_triggers = ON;
+        PRAGMA defer_foreign_keys = ON;
+        PRAGMA recursive_triggers = ON;
 
-            ATTACH DATABASE '{remote_db_path}' AS extern;
+        ATTACH DATABASE '{remote_db_path}' AS extern;
 
-            UPDATE main._synq_local SET is_merging = 1;
+        UPDATE main._synq_local SET is_merging = 1;
 
-            {_MERGE_PREPARATION}
-            {merging}
+        {_MERGE_PREPARATION}
+        {merging}
+        {_MERGE_END}
 
-            UPDATE main._synq_local SET is_merging = 0;
+        UPDATE main._synq_local SET is_merging = 0;
 
-            DETACH DATABASE extern;
+        DETACH DATABASE extern;
 
-            PRAGMA ignore_check_constraints = OFF;
-            PRAGMA defer_foreign_keys = OFF;
-            PRAGMA recursive_triggers = OFF;
-        COMMIT;
+        PRAGMA defer_foreign_keys = OFF;
+        PRAGMA recursive_triggers = OFF;
         """
-    return textwrap.dedent(result)
+    result = textwrap.dedent(result)
+    with closing(db.cursor()) as cursor:
+        cursor.executescript(result)
 
 
 _MERGE_PREPARATION = """
@@ -658,7 +658,9 @@ UPDATE _synq_fklog SET mark = NULL WHERE mark IS NOT NULL;
 
 -- Prepare for building updated rows and new rows
 -- todo...
+"""
 
+_MERGE_END = """
 -- Update context
 UPDATE main._synq_context SET ts = ctx.ts
 FROM extern._synq_context AS ctx
@@ -726,13 +728,12 @@ def _create_pull(tables: sql.Symbols) -> str:
                     ) AS "{col_name}"'''
         selectors = ["id.rowid"] + selectors
         merger += f"""
+        INSERT INTO main."{tbl_name}"
         SELECT {', '.join(selectors)} FROM (
             SELECT DISTINCT id.rowid, id.row_peer, id.row_ts
-            FROM main._synq_log_active AS log
-                JOIN _synq_context AS ctx
-                    ON log.ts > ctx.ts AND log.peer = ctx.peer
-                JOIN main."_synq_id_{tbl_name}" AS id
-                    ON log.row_ts = id.row_ts AND log.row_peer = id.row_peer
+            FROM main."_synq_id_{tbl_name}" AS id
+                JOIN main._synq_context AS ctx
+                    ON id.row_ts > ctx.ts AND id.row_peer = ctx.peer
         ) AS id;
         """
         result += f"""
