@@ -440,30 +440,39 @@ def _get_schema(db: sqlite3.Connection) -> str:
     return result
 
 
-def _allocate_id(db: sqlite3.Connection, id: int | None = None) -> None:
+def _allocate_id(
+    db: sqlite3.Connection, /, *, id: int | None = None, ts: bool = True
+) -> None:
     with closing(db.cursor()) as cursor:
         cursor.execute("DELETE FROM _synq_local")
         cursor.execute("INSERT INTO _synq_local DEFAULT VALUES;")
         if id is not None:
             cursor.execute(f"UPDATE _synq_local SET peer = {id};")
+        if not ts:
+            cursor.execute(f"DROP TRIGGER IF EXISTS  _synq_local_clock;")
         cursor.execute("INSERT INTO _synq_context SELECT peer, ts FROM _synq_local;")
 
 
-def init(db: sqlite3.Connection, id: int | None = None) -> None:
+def init(db: sqlite3.Connection, /, *, id: int | None = None, ts: bool = True) -> None:
     sql_ar_schema = _get_schema(db)
     tables = sql.symbols(parse_schema(sql_ar_schema))
     with closing(db.cursor()) as cursor:
         cursor.executescript(_CREATE_TABLES)
         cursor.executescript(_synq_script_for(tables))
-    _allocate_id(db, id)
+    _allocate_id(db, id=id, ts=ts)
 
 
 def clone_to(
-    src: sqlite3.Connection, target: sqlite3.Connection, id: int | None = None
+    src: sqlite3.Connection,
+    target: sqlite3.Connection,
+    /,
+    *,
+    id: int | None = None,
+    ts: bool = True,
 ) -> None:
     src.commit()
     src.backup(target)
-    _allocate_id(target, id)
+    _allocate_id(target, id=id, ts=ts)
 
 
 def pull_from(db: sqlite3.Connection, remote_db_path: str) -> str:
@@ -496,6 +505,12 @@ def pull_from(db: sqlite3.Connection, remote_db_path: str) -> str:
 
 
 _MERGE_PREPARATION = """
+-- Update clock
+UPDATE _synq_local SET ts = max(
+    main._synq_local.ts,
+    (SELECT max(ts) FROM extern._synq_context)
+);
+
 -- Add missing peers in the context with a ts of 0
 INSERT OR IGNORE INTO main._synq_context
 SELECT peer, 0 FROM extern._synq_context;
