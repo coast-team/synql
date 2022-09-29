@@ -479,7 +479,6 @@ def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str) -> Non
     sql_ar_schema = _get_schema(db)
     tables = sql.symbols(parse_schema(sql_ar_schema))
     merging = _create_pull(tables)
-    print(merging)
     result = f"""
         PRAGMA defer_foreign_keys = ON;
         PRAGMA recursive_triggers = ON;
