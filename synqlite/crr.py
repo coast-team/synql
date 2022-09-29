@@ -36,8 +36,6 @@ CREATE TABLE IF NOT EXISTS _synq_local(
     undocleanup integer NOT NULL DEFAULT 0 CHECK(undocleanup & 1 = undocleanup)
 );
 
-INSERT OR IGNORE INTO _synq_local DEFAULT VALUES;
-
 DROP TRIGGER IF EXISTS  _synq_local_clock;
 CREATE TRIGGER          _synq_local_clock
 AFTER UPDATE OF ts ON _synq_local WHEN (OLD.ts + 1 = NEW.ts)
@@ -61,8 +59,6 @@ CREATE TABLE IF NOT EXISTS _synq_context(
     peer integer PRIMARY KEY,
     ts integer NOT NULL DEFAULT 0 CHECK (ts >= 0)
 );
-
-INSERT OR IGNORE INTO _synq_context SELECT peer, ts FROM _synq_local;
 
 CREATE TABLE IF NOT EXISTS _synq_id(
     row_ts integer NOT NULL,
@@ -444,22 +440,30 @@ def _get_schema(db: sqlite3.Connection) -> str:
     return result
 
 
-def init(db: sqlite3.Connection) -> None:
+def _allocate_id(db: sqlite3.Connection, id: int | None = None) -> None:
+    with closing(db.cursor()) as cursor:
+        cursor.execute("DELETE FROM _synq_local")
+        cursor.execute("INSERT INTO _synq_local DEFAULT VALUES;")
+        if id is not None:
+            cursor.execute(f"UPDATE _synq_local SET peer = {id};")
+        cursor.execute("INSERT INTO _synq_context SELECT peer, ts FROM _synq_local;")
+
+
+def init(db: sqlite3.Connection, id: int | None = None) -> None:
     sql_ar_schema = _get_schema(db)
     tables = sql.symbols(parse_schema(sql_ar_schema))
     with closing(db.cursor()) as cursor:
         cursor.executescript(_CREATE_TABLES)
         cursor.executescript(_synq_script_for(tables))
+    _allocate_id(db, id)
 
 
-def clone_to(src: sqlite3.Connection, target: sqlite3.Connection) -> None:
+def clone_to(
+    src: sqlite3.Connection, target: sqlite3.Connection, id: int | None = None
+) -> None:
+    src.commit()
     src.backup(target)
-    with closing(target.cursor()) as cursor:
-        cursor.execute("DELETE FROM _synq_local")
-        cursor.execute("INSERT OR IGNORE INTO _synq_local DEFAULT VALUES;")
-        cursor.execute(
-            "INSERT OR IGNORE INTO _synq_context SELECT peer, ts FROM _synq_local;"
-        )
+    _allocate_id(target, id)
 
 
 def pull_from(db: sqlite3.Connection, remote_db_path: str) -> str:
