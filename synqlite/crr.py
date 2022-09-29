@@ -457,6 +457,9 @@ def clone_to(src: sqlite3.Connection, target: sqlite3.Connection) -> None:
     with closing(target.cursor()) as cursor:
         cursor.execute("DELETE FROM _synq_local")
         cursor.execute("INSERT OR IGNORE INTO _synq_local DEFAULT VALUES;")
+        cursor.execute(
+            "INSERT OR IGNORE INTO _synq_context SELECT peer, ts FROM _synq_local;"
+        )
 
 
 def pull_from(db: sqlite3.Connection, remote_db_path: str) -> str:
