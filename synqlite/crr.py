@@ -2,6 +2,7 @@ from sqlschm.parser import parse_schema
 from sqlschm import sql
 from contextlib import closing
 import logging
+import pathlib
 import textwrap
 import sqlite3
 from synqlite import sqlschm_utils as utils
@@ -639,7 +640,7 @@ UPDATE _synq_fklog SET mark = NULL WHERE mark IS NOT NULL;
 -- Update context
 UPDATE main._synq_context SET ts = ctx.ts
 FROM extern._synq_context AS ctx
-WHERE ctx.ts > ts AND peer = ctx.peer;
+WHERE ctx.ts > main._synq_context.ts AND main._synq_context.peer = ctx.peer;
 """
 
 
@@ -655,7 +656,7 @@ def _create_pull(tables: sql.Symbols) -> str:
             col_names += col_name
             selectors += f'''(
                 SELECT log.val FROM main._synq_log_active AS log
-                WHERE  log.row_ts = id.row_ts ANDlog.row_peer = id.row_peer AND
+                WHERE log.row_ts = id.row_ts AND log.row_peer = id.row_peer AND
                     log.col = {i}
             ) AS "{col_name}"'''
         for fk_id, fk in enumerate(tbl.foreign_keys()):
@@ -701,8 +702,9 @@ def _create_pull(tables: sql.Symbols) -> str:
                                 fklog.fk_id = {fk_id} AND log.col = {j}
                         )
                     ) AS "{col_name}"'''
+        selectors = ["id.rowid"] + selectors
         merger += f"""
-        SELECT id.rowid, {', '.join(selectors)} FROM (
+        SELECT {', '.join(selectors)} FROM (
             SELECT DISTINCT id.rowid, id.row_peer, id.row_ts
             FROM main._synq_log_active AS log
                 JOIN _synq_context AS ctx
@@ -759,7 +761,7 @@ def _create_pull(tables: sql.Symbols) -> str:
 
         -- Auto-assign local rowids for redone rows
         INSERT OR IGNORE INTO main."_synq_id_{tbl_name}"(row_ts, row_peer)
-        SELECT id.row_ts id.row_peer
+        SELECT id.row_ts, id.row_peer
         FROM main._synq_undolog_active_redo AS redo
             JOIN main._synq_context AS ctx
                 ON redo.ts > ctx.ts AND redo.peer = ctx.peer
