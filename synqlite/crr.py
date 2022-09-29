@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS _synq_local(
     undocleanup integer NOT NULL DEFAULT 0 CHECK(undocleanup & 1 = undocleanup)
 );
 
+INSERT INTO _synq_local DEFAULT VALUES;
+
 DROP TRIGGER IF EXISTS  _synq_local_clock;
 CREATE TRIGGER          _synq_local_clock
 AFTER UPDATE OF ts ON _synq_local WHEN (OLD.ts + 1 = NEW.ts)
@@ -444,9 +446,10 @@ def _allocate_id(
     db: sqlite3.Connection, /, *, id: int | None = None, ts: bool = True
 ) -> None:
     with closing(db.cursor()) as cursor:
-        cursor.execute("DELETE FROM _synq_local")
-        cursor.execute("INSERT INTO _synq_local DEFAULT VALUES;")
-        if id is not None:
+        if id is None:
+            # Generate an identifier with 48 bits of entropy
+            cursor.execute(f"UPDATE _synq_local SET peer = (random() >> 16);")
+        else:
             cursor.execute(f"UPDATE _synq_local SET peer = {id};")
         if not ts:
             cursor.execute(f"DROP TRIGGER IF EXISTS  _synq_local_clock;")
