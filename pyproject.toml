@@ -7,7 +7,7 @@ license = "MIT"
 
 [tool.poetry.dependencies]
 python = "^3.10"
-sqlschm = "^0.6.0"
+sqlschm = "^0.6.1"
 
 [tool.poetry.dev-dependencies]
 black = "^22.1.0"
