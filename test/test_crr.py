@@ -58,7 +58,7 @@ def test_clone_to(tmp_path: pathlib.Path) -> None:
     ) as b:
         exec(a, "CREATE TABLE X(rowid integer PRIMARY KEY);")
         crr.init(a, id=1, ts=False)
-        crr.clone_to(a, b, id=2, ts=False)
+        crr.clone_to(a, b, id=2)
 
         assert fetch(a, "SELECT peer FROM _synq_local") == [(1,)]
         assert fetch(b, "SELECT peer FROM _synq_local") == [(2,)]
@@ -70,7 +70,7 @@ def test_pull_from_insert(tmp_path: pathlib.Path) -> None:
     ) as b:
         exec(a, "CREATE TABLE X(rowid integer PRIMARY KEY);")
         crr.init(a, id=1, ts=False)
-        crr.clone_to(a, b, id=2, ts=False)
+        crr.clone_to(a, b, id=2)
         exec(b, "INSERT INTO X VALUES(1)")
 
         crr.pull_from(a, tmp_path / "b.db")

@@ -442,17 +442,13 @@ def _get_schema(db: sqlite3.Connection) -> str:
     return result
 
 
-def _allocate_id(
-    db: sqlite3.Connection, /, *, id: int | None = None, ts: bool = True
-) -> None:
+def _allocate_id(db: sqlite3.Connection, /, *, id: int | None = None) -> None:
     with closing(db.cursor()) as cursor:
         if id is None:
             # Generate an identifier with 48 bits of entropy
             cursor.execute(f"UPDATE _synq_local SET peer = (random() >> 16);")
         else:
             cursor.execute(f"UPDATE _synq_local SET peer = {id};")
-        if not ts:
-            cursor.execute(f"DROP TRIGGER IF EXISTS  _synq_local_clock;")
         cursor.execute("INSERT INTO _synq_context SELECT peer, ts FROM _synq_local;")
 
 
@@ -462,20 +458,17 @@ def init(db: sqlite3.Connection, /, *, id: int | None = None, ts: bool = True) -
     with closing(db.cursor()) as cursor:
         cursor.executescript(_CREATE_TABLES)
         cursor.executescript(_synq_script_for(tables))
-    _allocate_id(db, id=id, ts=ts)
+        if not ts:
+            cursor.execute(f"DROP TRIGGER IF EXISTS  _synq_local_clock;")
+    _allocate_id(db, id=id)
 
 
 def clone_to(
-    src: sqlite3.Connection,
-    target: sqlite3.Connection,
-    /,
-    *,
-    id: int | None = None,
-    ts: bool = True,
+    src: sqlite3.Connection, target: sqlite3.Connection, /, *, id: int | None = None
 ) -> None:
     src.commit()
     src.backup(target)
-    _allocate_id(target, id=id, ts=ts)
+    _allocate_id(target, id=id)
 
 
 def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str) -> None:
