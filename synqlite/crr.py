@@ -671,15 +671,17 @@ def _create_pull(tables: sql.Symbols) -> str:
     for tbl in tables.values():
         tbl_name = tbl.name[0]
         repl_col_names = map(lambda col: col.name, utils.replicated_columns(tbl))
-        selectors: list[str] = []
-        col_names: list[str] = []
+        selectors: list[str] = ["id.rowid"]
+        col_names: list[str] = ["rowid"]
         for i, col_name in enumerate(repl_col_names):
-            col_names += col_name
-            selectors += f'''(
+            col_names += [col_name]
+            selectors += [
+                f'''(
                 SELECT log.val FROM main._synq_log_active AS log
                 WHERE log.row_ts = id.row_ts AND log.row_peer = id.row_peer AND
                     log.col = {i}
             ) AS "{col_name}"'''
+            ]
         for fk_id, fk in enumerate(tbl.foreign_keys()):
             f_tbl_name = fk.foreign_table.name[0]
             f_tbl = tables.get(f_tbl_name)
@@ -694,8 +696,9 @@ def _create_pull(tables: sql.Symbols) -> str:
             )
             if len(ref_col_names) == 1 and ref_col_names[0] not in f_repl_col_names:
                 # auto-inc pk
-                col_names += fk.columns[0]
-                selectors += f'''(
+                col_names += [fk.columns[0]]
+                selectors += [
+                    f'''(
                     SELECT rowid FROM main."_synq_id_{f_tbl_name}" AS rw
                         JOIN main._syn_fklog_active AS fklog
                             ON rw.row_ts = fklog.foreign_row_ts AND
@@ -704,14 +707,16 @@ def _create_pull(tables: sql.Symbols) -> str:
                         fklog.row_peer = id.row_peer AND
                         fklog.fk_id = {fk_id}
                 ) AS "{fk.columns[0]}"'''
+                ]
             else:
                 ref_col_idx = [
                     f_repl_col_names.index(col_name) for col_name in ref_col_names
                 ]
                 assert len(ref_col_names) == len(fk.columns)
                 for j, col_name in zip(ref_col_idx, fk.columns):
-                    col_names += col_name
-                    selectors += f'''(
+                    col_names += [col_name]
+                    selectors += [
+                        f'''(
                         SELECT val FROM main._synq_log_active AS log
                         WHERE log.rowid IN (
                             SELECT log.rowid FROM main._synq_log_active AS log
@@ -723,9 +728,9 @@ def _create_pull(tables: sql.Symbols) -> str:
                                 fklog.fk_id = {fk_id} AND log.col = {j}
                         )
                     ) AS "{col_name}"'''
-        selectors = ["id.rowid"] + selectors
+                    ]
         merger += f"""
-        INSERT INTO main."{tbl_name}"
+        INSERT INTO main."{tbl_name}"({', '.join(col_names)})
         SELECT {', '.join(selectors)} FROM (
             SELECT DISTINCT id.rowid, id.row_peer, id.row_ts
             FROM main."_synq_id_{tbl_name}" AS id
