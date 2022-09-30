@@ -1,4 +1,4 @@
-import sqlite3
+import pysqlite3 as sqlite3
 import typing
 from contextlib import closing
 from synqlite import crr

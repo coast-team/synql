@@ -8,6 +8,7 @@ license = "MIT"
 [tool.poetry.dependencies]
 python = "^3.10"
 sqlschm = "^0.6.1"
+pysqlite3-binary = "^0.4.7.post7"
 
 [tool.poetry.dev-dependencies]
 black = "^22.1.0"
@@ -21,3 +22,4 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.mypy]
 strict = true
+mypy_path = "./stubs/"

@@ -4,7 +4,7 @@ from contextlib import closing
 import logging
 import pathlib
 import textwrap
-import sqlite3
+import pysqlite3 as sqlite3
 from synqlite import sqlschm_utils as utils
 
 logging.basicConfig(level=logging.DEBUG)
@@ -601,8 +601,7 @@ WHERE fklog.on_update = 4;
 -- undo latest rows with conflicting unique keys
 INSERT INTO main._synq_undolog_active(obj_ts, obj_peer)
 SELECT DISTINCT log.row_ts, log.row_peer
-FROM
-    main._synq_log_active AS log
+FROM main._synq_log_active AS log
     JOIN main._synq_id AS id USING(row_ts, row_peer)
     JOIN (
         SELECT * FROM main._synq_log_active AS log

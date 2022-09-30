@@ -175,6 +175,14 @@ all = ["twine (>=3.4.1)"]
 dev = ["twine (>=3.4.1)"]
 
 [[package]]
+name = "pysqlite3-binary"
+version = "0.4.7.post7"
+description = "DB-API 2.0 interface for Sqlite 3.x"
+category = "main"
+optional = false
+python-versions = "*"
+
+[[package]]
 name = "pytest"
 version = "7.1.3"
 description = "pytest: simple powerful testing with Python"
@@ -234,7 +242,7 @@ python-versions = ">=3.7"
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.10"
-content-hash = "282aa05af5acaf9acb1ff98e102e15dfed50a004828e77e4005cda4a00927add"
+content-hash = "8c48c7fc51e957a820874ade7b5f1b8884baf22abce44c099375a9eb9274b294"
 
 [metadata.files]
 attrs = [
@@ -338,6 +346,13 @@ pyparsing = [
 pyright = [
     {file = "pyright-1.1.273-py3-none-any.whl", hash = "sha256:bfaa2ca665337dbc3a581bcad5f366794c0f6b2d6932f9174a58d48f52d12e78"},
     {file = "pyright-1.1.273.tar.gz", hash = "sha256:dbfe37fa36ab1d0abfd450b1a50798aa04017a244103357b5caf9e82f41b1a67"},
+]
+pysqlite3-binary = [
+    {file = "pysqlite3_binary-0.4.7.post7-cp310-cp310-manylinux_2_24_x86_64.whl", hash = "sha256:07c66200d36556f6f5788dc32fc9665be12216977030d033bf48cb5ee24b6f0a"},
+    {file = "pysqlite3_binary-0.4.7.post7-cp36-cp36m-manylinux_2_24_x86_64.whl", hash = "sha256:21c0d182435b133400b4d2d9a4c9f972bd0196c0928bb542b28a7b422f4a6130"},
+    {file = "pysqlite3_binary-0.4.7.post7-cp37-cp37m-manylinux_2_24_x86_64.whl", hash = "sha256:da7eaacd4079fe2aba0e941c9fbfa20ccc1c10123df7ae680eb92dd1644b964e"},
+    {file = "pysqlite3_binary-0.4.7.post7-cp38-cp38-manylinux_2_24_x86_64.whl", hash = "sha256:96be548f809516b4d32d19709e6b05670c23921f00eaffcf7f96fc0c6d722c68"},
+    {file = "pysqlite3_binary-0.4.7.post7-cp39-cp39-manylinux_2_24_x86_64.whl", hash = "sha256:edf1eb2fcbb2e6a5ca13869d2b4e91ebe61a775ce1f73e7efcdddb186143613e"},
 ]
 pytest = [
     {file = "pytest-7.1.3-py3-none-any.whl", hash = "sha256:1377bda3466d70b55e3f5cecfa55bb7cfcf219c7964629b967c37cf0bda818b7"},
