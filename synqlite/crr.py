@@ -449,7 +449,9 @@ def _allocate_id(db: sqlite3.Connection, /, *, id: int | None = None) -> None:
             cursor.execute(f"UPDATE _synq_local SET peer = (random() >> 16);")
         else:
             cursor.execute(f"UPDATE _synq_local SET peer = {id};")
-        cursor.execute("INSERT INTO _synq_context SELECT peer, ts FROM _synq_local;")
+        cursor.execute(
+            "INSERT INTO _synq_context(peer, ts) SELECT peer, 0 FROM _synq_local;"
+        )
 
 
 def init(db: sqlite3.Connection, /, *, id: int | None = None, ts: bool = True) -> None:
