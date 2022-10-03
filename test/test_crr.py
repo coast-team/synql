@@ -82,11 +82,31 @@ def test_ins_repl_col(tmp_path: pathlib.Path) -> None:
         crr.init(a, id=1, ts=False)
         exec(a, "INSERT INTO X VALUES('v1')")
 
+        assert fetch(a, "SELECT rowid, v FROM X") == [(1, "v1")]
         assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [(1, 1, 1)]
+        assert fetch(a, "SELECT ts, peer FROM _synq_context") == [(2, 1)]
         assert fetch(
             a, "SELECT ts, peer, row_ts, row_peer, val, tbl_index FROM _synq_log"
         ) == [(2, 1, 1, 1, "v1", None)]
         assert fetch(a, "SELECT 1 FROM _synq_fklog") == []
+        assert fetch(a, "SELECT 1 FROM _synq_undolog") == []
+
+
+def test_up_repl_col(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a:
+        exec(a, "CREATE TABLE X(v any)")
+        crr.init(a, id=1, ts=False)
+        exec(a, "INSERT INTO X VALUES('v1')")
+        exec(a, "UPDATE X SET v = 'v2'")
+
+        assert fetch(a, "SELECT rowid, v FROM X") == [(1, "v2")]
+        assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [(1, 1, 1)]
+        assert fetch(a, "SELECT ts, peer FROM _synq_context") == [(3, 1)]
+        assert fetch(
+            a, "SELECT ts, peer, row_ts, row_peer, val, tbl_index FROM _synq_log"
+        ) == [(2, 1, 1, 1, "v1", None), (3, 1, 1, 1, "v2", None)]
+        assert fetch(a, "SELECT 1 FROM _synq_fklog") == []
+        assert fetch(a, "SELECT 1 FROM _synq_undolog") == []
 
 
 def test_clone_to(tmp_path: pathlib.Path) -> None:
@@ -169,6 +189,27 @@ def test_pull_del_repl_col(tmp_path: pathlib.Path) -> None:
         assert fetch(b, "SELECT ts, peer, obj_ts, obj_peer, ul FROM _synq_undolog") == [
             (3, 1, 1, 1, 1)
         ]
+
+
+def test_pull_up_repl_col(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b:
+        exec(a, "CREATE TABLE X(v any)")
+        crr.init(a, id=1, ts=False)
+        crr.clone_to(a, b, id=2)
+        exec(a, "INSERT INTO X VALUES('v1')")
+        exec(a, "UPDATE X SET v = 'v2'")
+
+        crr.pull_from(b, tmp_path / "a.db")
+        assert fetch(a, "SELECT rowid, v FROM X") == [(1, "v2")]
+        assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [(1, 1, 1)]
+        assert fetch(a, "SELECT ts, peer FROM _synq_context") == [(3, 1)]
+        assert fetch(
+            a, "SELECT ts, peer, row_ts, row_peer, val, tbl_index FROM _synq_log"
+        ) == [(2, 1, 1, 1, "v1", None), (3, 1, 1, 1, "v2", None)]
+        assert fetch(a, "SELECT 1 FROM _synq_fklog") == []
+        assert fetch(a, "SELECT 1 FROM _synq_undolog") == []
 
 
 def test_concur_ins_aliased_rowid(tmp_path: pathlib.Path) -> None:
