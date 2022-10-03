@@ -681,8 +681,8 @@ def _create_pull(tables: sql.Symbols) -> str:
     for tbl in tables.values():
         tbl_name = tbl.name[0]
         repl_col_names = map(lambda col: col.name, utils.replicated_columns(tbl))
-        selectors: list[str] = ["id.rowid"]
-        col_names: list[str] = ["rowid"]
+        selectors: list[str] = []
+        col_names: list[str] = []
         for i, col_name in enumerate(repl_col_names):
             col_names += [col_name]
             selectors += [
@@ -739,15 +739,28 @@ def _create_pull(tables: sql.Symbols) -> str:
                         )
                     ) AS "{col_name}"'''
                     ]
-        merger += f"""
-        INSERT INTO main."{tbl_name}"({', '.join(col_names)})
-        SELECT {', '.join(selectors)} FROM (
-            SELECT DISTINCT id.rowid, id.row_peer, id.row_ts
-            FROM main."_synq_id_{tbl_name}" AS id
-                JOIN main._synq_context AS ctx
-                    ON id.row_ts > ctx.ts AND id.row_peer = ctx.peer
-        ) AS id;
-        """
+        if selectors == []:
+            merger += f"""
+            INSERT INTO main."{tbl_name}"(rowid)
+            SELECT id.rowid FROM (
+                SELECT DISTINCT id.rowid, id.row_peer, id.row_ts
+                FROM main."_synq_id_{tbl_name}" AS id
+                    JOIN main._synq_context AS ctx
+                        ON id.row_ts > ctx.ts AND id.row_peer = ctx.peer
+            ) AS id;
+            """
+        else:
+            merger += f"""
+            INSERT INTO main."{tbl_name}"(rowid, {', '.join(col_names)})
+            SELECT id.rowid, {', '.join(selectors)} FROM (
+                SELECT DISTINCT id.rowid, id.row_peer, id.row_ts
+                FROM  main._synq_log_active AS log
+                    JOIN _synq_context AS ctx
+                        ON log.peer = ctx.peer AND log.ts > ctx.ts
+                    JOIN main."_synq_id_{tbl_name}" AS id
+                        ON log.row_peer = id.row_peer AND log.row_ts = id.row_ts
+            ) AS id;
+            """
         result += f"""
         -- Foreign keys must be disabled
 
