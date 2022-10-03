@@ -47,6 +47,15 @@ def is_generated(col: sql.Column) -> bool:
     )
 
 
+def rowid_aliases(tbl: sql.Table) -> list[str]:
+    pk = primary_key(tbl)
+    return list(
+        ({"rowid", "_rowid_", "oid"} - {col.name for col in tbl.columns}).union(
+            {col.name for col in tbl.columns if is_rowid_alias(col, pk)}
+        )
+    )
+
+
 def has_rowid_alias(tbl: sql.Table) -> bool:
     pk = primary_key(tbl)
     return not tbl.options.without_rowid and any(

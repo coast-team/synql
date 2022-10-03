@@ -60,6 +60,22 @@ def test_del_aliased_rowid(tmp_path: pathlib.Path) -> None:
         ]
 
 
+def test_up_aliased_rowid(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a:
+        exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
+        crr.init(a, id=1, ts=False)
+        exec(a, "INSERT INTO X VALUES(1)")
+        exec(a, "UPDATE X SET x = 2")
+
+        assert fetch(a, "SELECT rowid FROM X") == [(2,)]
+        assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [(2, 1, 1)]
+        assert fetch(a, "SELECT row_ts, row_peer FROM _synq_id") == [(1, 1)]
+        assert fetch(a, "SELECT ts, peer FROM _synq_context") == [(1, 1)]
+        assert fetch(a, "SELECT 1 FROM _synq_log") == []
+        assert fetch(a, "SELECT 1 FROM _synq_fklog") == []
+        assert fetch(a, "SELECT 1 FROM _synq_undolog") == []
+
+
 def test_ins_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
         exec(a, "CREATE TABLE X(v any)")

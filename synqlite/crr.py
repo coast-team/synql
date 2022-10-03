@@ -400,6 +400,17 @@ def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols) -> str:
         {fk_insertions}
     END;
     """.rstrip()
+    rowid_aliases = utils.rowid_aliases(tbl)
+    if len(rowid_aliases) > 0:
+        triggers += f"""
+        DROP TRIGGER IF EXISTS "_synq_log_update_rowid_{tbl_name}_rowid";
+        CREATE TRIGGER "_synq_log_update_rowid_{tbl_name}_rowid"
+        AFTER UPDATE OF {", ".join(rowid_aliases)} ON "{tbl_name}"
+        BEGIN
+            UPDATE "_synq_id_{tbl_name}" SET rowid = NEW."{rowid_aliases[0]}"
+            WHERE rowid = OLD."{rowid_aliases[0]}";
+        END;
+        """
     for i, col in enumerate(replicated_cols):
         uniqueness_ids = [
             i
