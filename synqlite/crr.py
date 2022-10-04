@@ -586,12 +586,12 @@ UPDATE main._synq_fklog SET mark = NULL WHERE mark IS NOT NULL;
 INSERT INTO main._synq_undolog_active(obj_peer, obj_ts)
 SELECT log.peer, log.ts
 FROM main._synq_log_active AS log JOIN
-    main._synq_fklog AS fk ON
-        log.row_ts = fk.foreign_row_ts AND
-        log.row_peer = fk.foreign_row_peer AND
-        log.tbl_index = fk.foreign_index AND
-        log.ts > fk.ts
-WHERE fk.on_update = 1 OR fk.on_update = 2;
+    main._synq_fklog AS fklog ON
+        log.row_ts = fklog.foreign_row_ts AND
+        log.row_peer = fklog.foreign_row_peer AND
+        log.tbl_index = fklog.foreign_index AND
+        (log.ts > fklog.ts OR (log.ts = fklog.ts AND log.peer > fklog.peer))
+WHERE fklog.on_update = 1 OR fklog.on_update = 2;
 
 -- B.2.. ON UPDATE SET NULL
 INSERT INTO main._synq_fklog_active(
@@ -604,7 +604,7 @@ FROM main._synq_log_active AS log JOIN main._synq_fklog AS fklog ON
     log.row_ts = fklog.foreign_row_ts AND
     log.row_peer = fklog.foreign_row_peer AND
     log.tbl_index = fklog.foreign_index AND
-    log.ts > fklog.ts
+    (log.ts > fklog.ts OR (log.ts = fklog.ts AND log.peer > fklog.peer))
 WHERE fklog.on_update = 4;
 
 -- C. resolve uniqueness conflicts
