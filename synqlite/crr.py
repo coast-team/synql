@@ -151,7 +151,7 @@ SELECT log.rowid, log.* FROM _synq_log AS log
             (undo.obj_ts = log.row_ts AND undo.obj_peer = log.row_peer)
         GROUP BY undo.obj_ts, undo.obj_peer HAVING max(undo.ul)%2 = 1
     )
-    GROUP BY row_ts, row_peer, col HAVING ts = max(ts);
+    ORDER BY log.ts DESC, log.peer DESC;
 
 DROP VIEW IF EXISTS _synq_fklog_active;
 CREATE VIEW         _synq_fklog_active AS
@@ -163,7 +163,7 @@ SELECT log.rowid, log.* FROM _synq_fklog AS log
             (undo.obj_ts = log.row_ts AND undo.obj_peer = log.row_peer)
         GROUP BY undo.obj_ts, undo.obj_peer HAVING max(undo.ul)%2 = 1
     )
-    GROUP BY row_ts, row_peer, fk_id HAVING ts = max(ts);
+    ORDER BY log.ts DESC, log.peer DESC;
 
 DROP TRIGGER IF EXISTS  _synq_fklog_active_insert;
 CREATE TRIGGER          _synq_fklog_active_insert
@@ -618,10 +618,14 @@ FROM main._synq_log_active AS log
         SELECT * FROM main._synq_log_active AS log
             JOIN _synq_id AS id USING(row_ts, row_peer)
     ) AS self USING(tbl, col, tbl_index, val)
-WHERE log.row_ts > self.row_ts AND tbl_index IS NOT NULL
+WHERE tbl_index IS NOT NULL AND (
+    log.row_ts > self.row_ts OR (
+        log.row_ts = self.row_ts AND log.row_peer > self.row_peer
+    )
+)
 GROUP BY log.row_ts, log.row_peer, self.row_ts, self.row_peer
 HAVING count(*) >= (
-    SELECT count(*) FROM _synq_log_active
+    SELECT count(DISTINCT col) FROM _synq_log_active
     WHERE row_ts = log.row_ts AND row_peer = log.row_peer AND tbl_index = log.tbl_index
 );
 
@@ -690,6 +694,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                 SELECT log.val FROM main._synq_log_active AS log
                 WHERE log.row_ts = id.row_ts AND log.row_peer = id.row_peer AND
                     log.col = {i}
+                LIMIT 1
             ) AS "{col_name}"'''
             ]
         for fk_id, fk in enumerate(tbl.foreign_keys()):
@@ -716,6 +721,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                     WHERE fklog.row_ts = id.row_ts AND
                         fklog.row_peer = id.row_peer AND
                         fklog.fk_id = {fk_id}
+                    LIMIT 1
                 ) AS "{fk.columns[0]}"'''
                 ]
             else:
@@ -737,6 +743,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                                 fklog.row_peer = id.row_peer AND
                                 fklog.fk_id = {fk_id} AND log.col = {j}
                         )
+                        LIMIT 1
                     ) AS "{col_name}"'''
                     ]
         if selectors == []:
