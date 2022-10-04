@@ -310,3 +310,36 @@ def test_concur_up_repl_col(tmp_path: pathlib.Path) -> None:
             (3, 1, 1, 1, "v2", None),
             (3, 2, 1, 1, "v3", None),
         ]
+
+
+def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b:
+        exec(a, "CREATE TABLE X(v any PRIMARY KEY);")
+        crr.init(a, id=1, ts=False)
+        crr.clone_to(a, b, id=2)
+        exec(a, "INSERT INTO X VALUES('v1')")
+        exec(b, "INSERT INTO X VALUES('v1')")
+
+        crr.pull_from(b, tmp_path / "a.db")
+        assert fetch(b, "SELECT rowid, v FROM X") == [(1, "v1")]
+        assert fetch(b, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [
+            (1, 1, 1),
+        ]
+        assert fetch(b, "SELECT row_ts, row_peer FROM _synq_id") == [(1, 1), (1, 2)]
+        assert fetch(b, "SELECT peer, ts FROM _synq_context") == [(1, 2), (2, 2)]
+        assert fetch(b, "SELECT ts, peer, obj_ts, obj_peer, ul FROM _synq_undolog") == [
+            (3, 2, 1, 2, 1)
+        ]
+
+        crr.pull_from(a, tmp_path / "b.db")
+        assert fetch(a, "SELECT rowid, v FROM X") == [(1, "v1")]
+        assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [
+            (1, 1, 1),
+        ]
+        assert fetch(a, "SELECT row_ts, row_peer FROM _synq_id") == [(1, 1), (1, 2)]
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 2), (2, 2)]
+        assert fetch(a, "SELECT ts, peer, obj_ts, obj_peer, ul FROM _synq_undolog") == [
+            (3, 2, 1, 2, 1)
+        ]
