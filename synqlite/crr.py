@@ -720,7 +720,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                 selectors += [
                     f'''(
                     SELECT rowid FROM main."_synq_id_{f_tbl_name}" AS rw
-                        JOIN main._syn_fklog_active AS fklog
+                        JOIN main._synq_fklog_active AS fklog
                             ON rw.row_ts = fklog.foreign_row_ts AND
                                 rw.row_peer = fklog.foreign_row_peer
                     WHERE fklog.row_ts = id.row_ts AND
