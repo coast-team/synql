@@ -33,7 +33,7 @@ def test_ins_aliased_rowid(tmp_path: pathlib.Path) -> None:
         assert fetch(a, "SELECT rowid FROM X") == [(1,)]
         assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [(1, 1, 1)]
         assert fetch(a, "SELECT row_ts, row_peer FROM _synq_id") == [(1, 1)]
-        assert fetch(a, "SELECT ts, peer FROM _synq_context") == [(1, 1)]
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 1)]
         assert fetch(a, "SELECT 1 FROM _synq_log") == []
         assert fetch(a, "SELECT 1 FROM _synq_fklog") == []
         assert fetch(a, "SELECT 1 FROM _synq_undolog") == []
@@ -49,7 +49,7 @@ def test_del_aliased_rowid(tmp_path: pathlib.Path) -> None:
         assert fetch(a, "SELECT * FROM X") == []
         assert fetch(a, "SELECT * FROM _synq_id_X") == []
         assert fetch(a, "SELECT row_ts, row_peer FROM _synq_id") == [(1, 1)]
-        assert fetch(a, "SELECT ts, peer FROM _synq_context") == [(2, 1)]
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 2)]
         assert fetch(a, "SELECT ts, peer, obj_ts, obj_peer, ul FROM _synq_undolog") == [
             (2, 1, 1, 1, 1)
         ]
@@ -70,7 +70,7 @@ def test_up_aliased_rowid(tmp_path: pathlib.Path) -> None:
         assert fetch(a, "SELECT rowid FROM X") == [(2,)]
         assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [(2, 1, 1)]
         assert fetch(a, "SELECT row_ts, row_peer FROM _synq_id") == [(1, 1)]
-        assert fetch(a, "SELECT ts, peer FROM _synq_context") == [(1, 1)]
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 1)]
         assert fetch(a, "SELECT 1 FROM _synq_log") == []
         assert fetch(a, "SELECT 1 FROM _synq_fklog") == []
         assert fetch(a, "SELECT 1 FROM _synq_undolog") == []
@@ -84,7 +84,7 @@ def test_ins_repl_col(tmp_path: pathlib.Path) -> None:
 
         assert fetch(a, "SELECT rowid, v FROM X") == [(1, "v1")]
         assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [(1, 1, 1)]
-        assert fetch(a, "SELECT ts, peer FROM _synq_context") == [(2, 1)]
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 2)]
         assert fetch(
             a, "SELECT ts, peer, row_ts, row_peer, val, tbl_index FROM _synq_log"
         ) == [(2, 1, 1, 1, "v1", None)]
@@ -101,7 +101,7 @@ def test_up_repl_col(tmp_path: pathlib.Path) -> None:
 
         assert fetch(a, "SELECT rowid, v FROM X") == [(1, "v2")]
         assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [(1, 1, 1)]
-        assert fetch(a, "SELECT ts, peer FROM _synq_context") == [(3, 1)]
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 3)]
         assert fetch(
             a, "SELECT ts, peer, row_ts, row_peer, val, tbl_index FROM _synq_log"
         ) == [(2, 1, 1, 1, "v1", None), (3, 1, 1, 1, "v2", None)]
