@@ -315,13 +315,14 @@ def test_concur_up_repl_col(tmp_path: pathlib.Path) -> None:
 def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
-    ) as b:
+    ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bakk:
         exec(a, "CREATE TABLE X(v any PRIMARY KEY);")
         crr.init(a, id=1, ts=False)
         crr.clone_to(a, b, id=2)
         exec(a, "INSERT INTO X VALUES('v1')")
         assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 2)]
         exec(b, "INSERT INTO X VALUES('v1')")
+        b.backup(b_bakk)
 
         crr.pull_from(b, tmp_path / "a.db")
         assert fetch(b, "SELECT rowid, v FROM X") == [(1, "v1")]
@@ -334,13 +335,62 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
             (3, 2, 1, 2, 1)
         ]
 
-        crr.pull_from(a, tmp_path / "b.db")
+        crr.pull_from(a, tmp_path / "b.bak.db")
         assert fetch(a, "SELECT rowid, v FROM X") == [(1, "v1")]
         assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [
             (1, 1, 1),
         ]
         assert fetch(a, "SELECT row_ts, row_peer FROM _synq_id") == [(1, 1), (1, 2)]
-        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 2), (2, 2)]
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 3), (2, 2)]
         assert fetch(a, "SELECT ts, peer, obj_ts, obj_peer, ul FROM _synq_undolog") == [
-            (3, 2, 1, 2, 1)
+            (3, 1, 1, 2, 1)
+        ]
+
+
+def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
+        exec(a, "CREATE TABLE X(u any PRIMARY KEY, v any UNIQUE);")
+        crr.init(a, id=1, ts=False)
+        crr.clone_to(a, b, id=2)
+        exec(a, "INSERT INTO X VALUES('u1', 'v1')")
+        exec(a, "INSERT INTO X VALUES('u2', 'v2')")
+        exec(b, "INSERT INTO X VALUES('u1', 'v2')")
+        b.backup(b_bak)
+
+        crr.pull_from(b, tmp_path / "a.db")
+        assert fetch(b, "SELECT rowid, u, v FROM X") == [
+            (1, "u1", "v1"),
+        ]
+        assert fetch(b, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [
+            (1, 1, 1),
+        ]
+        assert fetch(b, "SELECT row_ts, row_peer FROM _synq_id") == [
+            (1, 1),
+            (1, 2),
+            (4, 1),
+        ]
+        assert fetch(b, "SELECT peer, ts FROM _synq_context") == [(1, 6), (2, 8)]
+        assert fetch(b, "SELECT ts, peer, obj_ts, obj_peer, ul FROM _synq_undolog") == [
+            (7, 2, 1, 2, 1),
+            (8, 2, 4, 1, 1),
+        ]
+
+        crr.pull_from(a, tmp_path / "b.bak.db")
+        assert fetch(a, "SELECT rowid, u, v FROM X") == [
+            (1, "u1", "v1"),
+        ]
+        assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [
+            (1, 1, 1),
+        ]
+        assert fetch(a, "SELECT row_ts, row_peer FROM _synq_id") == [
+            (1, 1),
+            (1, 2),
+            (4, 1),
+        ]
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 8), (2, 3)]
+        assert fetch(a, "SELECT ts, peer, obj_ts, obj_peer, ul FROM _synq_undolog") == [
+            (7, 1, 1, 2, 1),
+            (8, 1, 4, 1, 1),
         ]
