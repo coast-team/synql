@@ -320,6 +320,7 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
         crr.init(a, id=1, ts=False)
         crr.clone_to(a, b, id=2)
         exec(a, "INSERT INTO X VALUES('v1')")
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 2)]
         exec(b, "INSERT INTO X VALUES('v1')")
 
         crr.pull_from(b, tmp_path / "a.db")
@@ -328,7 +329,7 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
             (1, 1, 1),
         ]
         assert fetch(b, "SELECT row_ts, row_peer FROM _synq_id") == [(1, 1), (1, 2)]
-        assert fetch(b, "SELECT peer, ts FROM _synq_context") == [(1, 2), (2, 2)]
+        assert fetch(b, "SELECT peer, ts FROM _synq_context") == [(1, 2), (2, 3)]
         assert fetch(b, "SELECT ts, peer, obj_ts, obj_peer, ul FROM _synq_undolog") == [
             (3, 2, 1, 2, 1)
         ]

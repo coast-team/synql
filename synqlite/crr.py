@@ -676,6 +676,11 @@ _MERGE_END = """
 UPDATE main._synq_context SET ts = ctx.ts
 FROM extern._synq_context AS ctx
 WHERE ctx.ts > main._synq_context.ts AND main._synq_context.peer = ctx.peer;
+
+UPDATE main._synq_context SET ts = local.ts
+FROM main._synq_local AS local
+WHERE main._synq_context.peer = local.peer AND
+    local.ts > (SELECT max(ts) FROM extern._synq_context);
 """
 
 
