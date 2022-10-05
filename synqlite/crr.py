@@ -508,6 +508,7 @@ def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str) -> Non
         PRAGMA recursive_triggers = OFF;
         """
     result = textwrap.dedent(result)
+    print(merging)
     with closing(db.cursor()) as cursor:
         cursor.executescript(result)
 
@@ -765,12 +766,18 @@ def _create_pull(tables: sql.Symbols) -> str:
             merger += f"""
             INSERT INTO main."{tbl_name}"(rowid, {', '.join(col_names)})
             SELECT id.rowid, {', '.join(selectors)} FROM (
-                SELECT DISTINCT id.rowid, id.row_peer, id.row_ts
-                FROM  main._synq_log_active AS log
-                    JOIN _synq_context AS ctx
-                        ON log.peer = ctx.peer AND log.ts > ctx.ts
-                    JOIN main."_synq_id_{tbl_name}" AS id
-                        ON log.row_peer = id.row_peer AND log.row_ts = id.row_ts
+                SELECT DISTINCT id.rowid, id.row_peer, id.row_ts FROM (
+                    SELECT log.row_peer, log.row_ts
+                    FROM  main._synq_log_active AS log
+                        JOIN _synq_context AS ctx
+                            ON log.peer = ctx.peer AND log.ts > ctx.ts
+                    UNION
+                    SELECT fklog.row_peer, fklog.row_ts
+                    FROM  main._synq_fklog_active AS fklog
+                        JOIN _synq_context AS ctx
+                            ON fklog.peer = ctx.peer AND fklog.ts > ctx.ts
+                ) JOIN main."_synq_id_{tbl_name}" AS id
+                    USING(row_ts, row_peer)
             ) AS id;
             """
         result += f"""
