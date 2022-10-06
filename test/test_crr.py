@@ -110,7 +110,7 @@ def test_up_repl_col(tmp_path: pathlib.Path) -> None:
         assert fetch(a, "SELECT 1 FROM _synq_undolog") == []
 
 
-def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
+def test_ins_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
         exec(a, "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x))")
@@ -126,7 +126,6 @@ def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
             (1, 1, "X"),
             (2, 1, "Y"),
         ]
-        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 3)]
         assert fetch(a, "SELECT 1 FROM _synq_log") == []
         assert fetch(
             a,
@@ -146,6 +145,276 @@ def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
             )
         ]
         assert fetch(a, "SELECT 1 FROM _synq_undolog") == []
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 3)]
+
+
+def test_up_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a:
+        exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
+        exec(a, "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x))")
+        crr.init(a, id=1, ts=False)
+        exec(a, "INSERT INTO X VALUES(1)")
+        exec(a, "INSERT INTO Y VALUES(1, 1)")
+        exec(a, "INSERT INTO X VALUES(2)")
+        exec(a, "UPDATE Y SET x = 2")
+
+        assert fetch(a, "SELECT x FROM X") == [(1,), (2,)]
+        assert fetch(a, "SELECT y, x FROM Y") == [(1, 2)]
+        assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [
+            (1, 1, 1),
+            (2, 4, 1),
+        ]
+        assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_Y") == [(1, 2, 1)]
+        assert fetch(a, "SELECT row_ts, row_peer, tbl FROM _synq_id") == [
+            (1, 1, "X"),
+            (2, 1, "Y"),
+            (4, 1, "X"),
+        ]
+        assert fetch(a, "SELECT 1 FROM _synq_log") == []
+        assert fetch(
+            a,
+            "SELECT ts, peer, row_ts, row_peer, fk_id, on_delete, on_update, foreign_row_ts, foreign_row_peer, foreign_index FROM _synq_fklog",
+        ) == [
+            (
+                3,
+                1,
+                2,
+                1,
+                0,
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                1,
+                1,
+                0,
+            ),
+            (
+                5,
+                1,
+                2,
+                1,
+                0,
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                4,
+                1,
+                0,
+            ),
+        ]
+        assert fetch(a, "SELECT 1 FROM _synq_undolog") == []
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 5)]
+
+
+def test_ins_fk_repl_col(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a:
+        exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
+        exec(a, "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x))")
+        crr.init(a, id=1, ts=False)
+        exec(a, "INSERT INTO X VALUES(1)")
+        exec(a, "INSERT INTO Y VALUES(1, 1)")
+
+        assert fetch(a, "SELECT x FROM X") == [(1,)]
+        assert fetch(a, "SELECT y, x FROM Y") == [(1, 1)]
+        assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_X") == [(1, 1, 1)]
+        assert fetch(a, "SELECT rowid, row_ts, row_peer FROM _synq_id_Y") == [(1, 3, 1)]
+        assert fetch(a, "SELECT row_ts, row_peer, tbl FROM _synq_id") == [
+            (1, 1, "X"),
+            (3, 1, "Y"),
+        ]
+        assert fetch(
+            a, "SELECT ts, peer, row_ts, row_peer, val, tbl_index FROM _synq_log"
+        ) == [(2, 1, 1, 1, 1, 0)]
+        assert fetch(
+            a,
+            "SELECT ts, peer, row_ts, row_peer, fk_id, on_delete, on_update, foreign_row_ts, foreign_row_peer, foreign_index FROM _synq_fklog",
+        ) == [
+            (
+                4,
+                1,
+                3,
+                1,
+                0,
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                1,
+                1,
+                0,
+            )
+        ]
+        assert fetch(a, "SELECT 1 FROM _synq_undolog") == []
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 4)]
+
+
+def test_up_fk_repl_col(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a:
+        exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
+        exec(a, "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x))")
+        crr.init(a, id=1, ts=False)
+        exec(a, "INSERT INTO X VALUES(1)")
+        exec(a, "INSERT INTO Y VALUES(1, 1)")
+        exec(a, "INSERT INTO X VALUES(2)")
+        exec(a, "UPDATE Y SET x = 2")
+
+        assert fetch(a, "SELECT x FROM X") == [(1,), (2,)]
+        assert fetch(a, "SELECT y, x FROM Y") == [(1, 2)]
+        assert fetch(a, "SELECT row_ts, row_peer FROM _synq_id_X") == [
+            (1, 1),
+            (5, 1),
+        ]
+        assert fetch(a, "SELECT row_ts, row_peer FROM _synq_id_Y") == [(3, 1)]
+        assert fetch(a, "SELECT row_ts, row_peer, tbl FROM _synq_id") == [
+            (1, 1, "X"),
+            (3, 1, "Y"),
+            (5, 1, "X"),
+        ]
+        assert fetch(
+            a, "SELECT ts, peer, row_ts, row_peer, val, tbl_index FROM _synq_log"
+        ) == [(2, 1, 1, 1, 1, 0), (6, 1, 5, 1, 2, 0)]
+        assert fetch(
+            a,
+            "SELECT ts, peer, row_ts, row_peer, fk_id, on_delete, on_update, foreign_row_ts, foreign_row_peer, foreign_index FROM _synq_fklog",
+        ) == [
+            (
+                4,
+                1,
+                3,
+                1,
+                0,
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                1,
+                1,
+                0,
+            ),
+            (
+                7,
+                1,
+                3,
+                1,
+                0,
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                5,
+                1,
+                0,
+            ),
+        ]
+        assert fetch(a, "SELECT 1 FROM _synq_undolog") == []
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 7)]
+
+
+def test_ins_fk_repl_multi_col(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a:
+        exec(
+            a,
+            "CREATE TABLE X(x integer PRIMARY KEY, x1 integer, x2 integer, UNIQUE(x1,x2))",
+        )
+        exec(
+            a,
+            "CREATE TABLE Y(y integer PRIMARY KEY, x1 integer, x2 integer, FOREIGN KEY(x1,x2) REFERENCES X(x1, x2))",
+        )
+        crr.init(a, id=1, ts=False)
+        exec(a, "INSERT INTO X VALUES(1, 2, 3)")
+        exec(a, "INSERT INTO Y VALUES(1, 2, 3)")
+
+        assert fetch(a, "SELECT x, x1, x2 FROM X") == [(1, 2, 3)]
+        assert fetch(a, "SELECT y, x1, x2 FROM Y") == [(1, 2, 3)]
+        assert fetch(a, "SELECT row_ts, row_peer FROM _synq_id_X") == [(1, 1)]
+        assert fetch(a, "SELECT row_ts, row_peer FROM _synq_id_Y") == [(4, 1)]
+        assert fetch(a, "SELECT row_ts, row_peer, tbl FROM _synq_id") == [
+            (1, 1, "X"),
+            (4, 1, "Y"),
+        ]
+        assert fetch(
+            a, "SELECT ts, peer, row_ts, row_peer, val, tbl_index FROM _synq_log"
+        ) == [(2, 1, 1, 1, 2, 1), (3, 1, 1, 1, 3, 1)]
+        assert fetch(
+            a,
+            "SELECT ts, peer, row_ts, row_peer, fk_id, on_delete, on_update, foreign_row_ts, foreign_row_peer, foreign_index FROM _synq_fklog",
+        ) == [
+            (
+                5,
+                1,
+                4,
+                1,
+                0,
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                1,
+                1,
+                1,
+            )
+        ]
+        assert fetch(a, "SELECT 1 FROM _synq_undolog") == []
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 5)]
+
+
+def test_up_fk_repl_multi_col(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a:
+        exec(
+            a,
+            "CREATE TABLE X(x integer PRIMARY KEY, x1 integer, x2 integer, UNIQUE(x1,x2))",
+        )
+        exec(
+            a,
+            "CREATE TABLE Y(y integer PRIMARY KEY, x1 integer, x2 integer, FOREIGN KEY(x1,x2) REFERENCES X(x1, x2))",
+        )
+        crr.init(a, id=1, ts=False)
+        exec(a, "INSERT INTO X VALUES(1, 2, 3)")
+        exec(a, "INSERT INTO Y VALUES(1, 2, 3)")
+        exec(a, "INSERT INTO X VALUES(2, 3, 4)")
+        exec(a, "UPDATE Y SET x1 = 3, x2 = 4")
+
+        assert fetch(a, "SELECT x, x1, x2 FROM X") == [(1, 2, 3), (2, 3, 4)]
+        assert fetch(a, "SELECT y, x1, x2 FROM Y") == [(1, 3, 4)]
+        assert fetch(a, "SELECT row_ts, row_peer FROM _synq_id_X") == [
+            (1, 1),
+            (6, 1),
+        ]
+        assert fetch(a, "SELECT row_ts, row_peer FROM _synq_id_Y") == [(4, 1)]
+        assert fetch(a, "SELECT row_ts, row_peer, tbl FROM _synq_id") == [
+            (1, 1, "X"),
+            (4, 1, "Y"),
+            (6, 1, "X"),
+        ]
+        assert fetch(
+            a, "SELECT ts, peer, row_ts, row_peer, val, tbl_index FROM _synq_log"
+        ) == [
+            (2, 1, 1, 1, 2, 1),
+            (3, 1, 1, 1, 3, 1),
+            (7, 1, 6, 1, 3, 1),
+            (8, 1, 6, 1, 4, 1),
+        ]
+        assert fetch(
+            a,
+            "SELECT ts, peer, row_ts, row_peer, fk_id, on_delete, on_update, foreign_row_ts, foreign_row_peer, foreign_index FROM _synq_fklog",
+        ) == [
+            (
+                5,
+                1,
+                4,
+                1,
+                0,
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                1,
+                1,
+                1,
+            ),
+            (
+                9,
+                1,
+                4,
+                1,
+                0,
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                crr.FK_ACTION[sql.OnUpdateDelete.NO_ACTION],
+                6,
+                1,
+                1,
+            ),
+        ]
+        assert fetch(a, "SELECT 1 FROM _synq_undolog") == []
+        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 9)]
 
 
 def test_clone_to(tmp_path: pathlib.Path) -> None:
