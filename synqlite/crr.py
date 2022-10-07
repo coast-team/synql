@@ -150,8 +150,7 @@ SELECT log.rowid, log.* FROM _synq_log AS log
         WHERE (undo.obj_ts = log.ts AND undo.obj_peer = log.peer) OR
             (undo.obj_ts = log.row_ts AND undo.obj_peer = log.row_peer)
         GROUP BY undo.obj_ts, undo.obj_peer HAVING max(undo.ul)%2 = 1
-    )
-    ORDER BY log.ts DESC, log.peer DESC;
+    );
 
 DROP VIEW IF EXISTS _synq_fklog_active;
 CREATE VIEW         _synq_fklog_active AS
@@ -162,8 +161,7 @@ SELECT log.rowid, log.* FROM _synq_fklog AS log
         WHERE (undo.obj_ts = log.ts AND undo.obj_peer = log.peer) OR
             (undo.obj_ts = log.row_ts AND undo.obj_peer = log.row_peer)
         GROUP BY undo.obj_ts, undo.obj_peer HAVING max(undo.ul)%2 = 1
-    )
-    ORDER BY log.ts DESC, log.peer DESC;
+    );
 
 DROP TRIGGER IF EXISTS  _synq_fklog_active_insert;
 CREATE TRIGGER          _synq_fklog_active_insert
@@ -508,7 +506,6 @@ def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str) -> Non
         PRAGMA recursive_triggers = OFF;
         """
     result = textwrap.dedent(result)
-    print(merging)
     with closing(db.cursor()) as cursor:
         cursor.executescript(result)
 
@@ -700,6 +697,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                 SELECT log.val FROM main._synq_log_active AS log
                 WHERE log.row_ts = id.row_ts AND log.row_peer = id.row_peer AND
                     log.col = {i}
+                ORDER BY log.ts DESC, log.peer DESC
                 LIMIT 1
             ) AS "{col_name}"'''
             ]
@@ -720,13 +718,14 @@ def _create_pull(tables: sql.Symbols) -> str:
                 col_names += [fk.columns[0]]
                 selectors += [
                     f'''(
-                    SELECT rw.rowid FROM main."_synq_id_{f_tbl_name}" AS rw
-                        JOIN main._synq_fklog_active AS fklog
-                            ON rw.row_ts = fklog.foreign_row_ts AND
-                                rw.row_peer = fklog.foreign_row_peer
+                    SELECT rw.rowid FROM main._synq_fklog_active AS fklog
+                        JOIN main."_synq_id_{f_tbl_name}" AS rw
+                            ON fklog.foreign_row_ts = rw.row_ts AND
+                                fklog.foreign_row_peer = rw.row_peer
                     WHERE fklog.row_ts = id.row_ts AND
                         fklog.row_peer = id.row_peer AND
                         fklog.fk_id = {fk_id}
+                    ORDER BY fklog.ts DESC, fklog.peer DESC
                     LIMIT 1
                 ) AS "{fk.columns[0]}"'''
                 ]
@@ -749,6 +748,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                                 fklog.row_peer = id.row_peer AND
                                 fklog.fk_id = {fk_id} AND log.col = {j}
                         )
+                        ORDER BY log.ts DESC, log.peer DESC
                         LIMIT 1
                     ) AS "{col_name}"'''
                     ]
