@@ -592,3 +592,42 @@ def test_concur_del_fk_cascade(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(4, 2), obj=(2, 2), ul=1),
             },
         )
+
+
+def test_concur_del_fk_set_null(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
+        exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
+        exec(
+            a,
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE SET NULL)",
+        )
+        crr.init(a, id=1, ts=False)
+        exec(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, id=2)
+        exec(a, "DELETE FROM X")
+        a.backup(a_bak)
+        exec(b, "INSERT INTO Y VALUES(1, 1)")
+
+        crr.pull_from(a, tmp_path / "b.db")
+        assert crr_from(a) == Crr(
+            tbls={"X": set(), "Y": {(1, None, (2, 2))}},
+            ctx={1: 4, 2: 3},
+            log={
+                Undo(ts=(2, 1), obj=(1, 1), ul=1),
+                Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
+                Ref(ts=(4, 1), row=(2, 2), fk=0, target=(None, None)),
+            },
+        )
+
+        crr.pull_from(b, tmp_path / "a.bak.db")
+        assert crr_from(b) == Crr(
+            tbls={"X": set(), "Y": {(1, None, (2, 2))}},
+            ctx={1: 2, 2: 4},
+            log={
+                Undo(ts=(2, 1), obj=(1, 1), ul=1),
+                Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
+                Ref(ts=(4, 2), row=(2, 2), fk=0, target=(None, None)),
+            },
+        )
