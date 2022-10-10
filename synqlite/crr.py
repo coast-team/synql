@@ -6,17 +6,39 @@ import pathlib
 import textwrap
 import pysqlite3 as sqlite3
 from synqlite import sqlschm_utils as utils
+from dataclasses import dataclass
+from typing import Literal
 
 logging.basicConfig(level=logging.DEBUG)
 
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class Config:
+    physical_clock: bool = True
+    no_action_is_cascade = False
+
+
 FK_ACTION = {
     sql.OnUpdateDelete.CASCADE: 0,
-    None: 1,  # same as NO_ACTION
-    sql.OnUpdateDelete.NO_ACTION: 1,
-    sql.OnUpdateDelete.RESTRICT: 2,
-    sql.OnUpdateDelete.SET_DEFAULT: 3,
-    sql.OnUpdateDelete.SET_NULL: 4,
+    sql.OnUpdateDelete.RESTRICT: 1,
+    sql.OnUpdateDelete.SET_NULL: 2,
 }
+
+
+def normalize_fk_action(
+    action: sql.OnUpdateDelete | None, conf: Config
+) -> Literal[sql.OnUpdateDelete.CASCADE] | Literal[
+    sql.OnUpdateDelete.RESTRICT
+] | Literal[sql.OnUpdateDelete.SET_NULL]:
+    if action is None or action is sql.OnUpdateDelete.NO_ACTION:
+        if conf.no_action_is_cascade:
+            return sql.OnUpdateDelete.CASCADE
+        else:
+            return sql.OnUpdateDelete.RESTRICT
+    elif action is sql.OnUpdateDelete.SET_DEFAULT:
+        raise Exception("SybQLite does not support On DELETE/UPDATE SET DEFAULT")
+    else:
+        return action
 
 
 _SELECT_AR_TABLE_SCHEMA = """--sql
@@ -102,8 +124,8 @@ CREATE TABLE IF NOT EXISTS _synq_fklog(
     fk_id integer NOT NULL,
     -- ON DELETE/UPDATE action info
     -- 0: CASCADE, 1: NO ACTION, 2: RESTRICT, 3: SET DEFAULT, 4: SET NULL
-    on_delete integer NOT NULL CHECK(0 <= on_delete AND on_delete <= 4),
-    on_update integer NOT NULL CHECK(0 <= on_delete AND on_delete <= 4),
+    on_delete integer NOT NULL CHECK(0 <= on_delete AND on_delete <= 2),
+    on_update integer NOT NULL CHECK(0 <= on_update AND on_update <= 2),
     foreign_row_ts integer DEFAULT NULL,
     foreign_row_peer integer DEFAULT NULL,
     -- which tbl_index of the foreign row is used?
@@ -235,7 +257,7 @@ END;
 """
 
 
-def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols) -> str:
+def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols, conf: Config) -> str:
     # FIXME: We do not support schema where:
     # - tables that reuse the name rowid
     # - without rowid tables (that's fine)
@@ -347,7 +369,7 @@ def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols) -> str:
             )
             SELECT
                 local.ts, local.peer, cur.row_ts, cur.row_peer, {fk_id},
-                {FK_ACTION[fk.on_delete]}, {FK_ACTION[fk.on_update]},
+                {FK_ACTION[normalize_fk_action(fk.on_delete, conf)]}, {FK_ACTION[normalize_fk_action(fk.on_update, conf)]},
                 {foreign_index}
             FROM _synq_local AS local, (
                 SELECT * FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid
@@ -436,9 +458,9 @@ def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols) -> str:
     return textwrap.dedent(table_synq_id) + textwrap.dedent(triggers)
 
 
-def _synq_script_for(tables: sql.Symbols) -> str:
+def _synq_script_for(tables: sql.Symbols, conf: Config) -> str:
     return "".join(
-        _synq_triggers_for(tbl, tables)
+        _synq_triggers_for(tbl, tables, conf)
         for tbl in tables.values()
         if not utils.is_temp(tbl)
     ).strip()
@@ -463,13 +485,15 @@ def _allocate_id(db: sqlite3.Connection, /, *, id: int | None = None) -> None:
         )
 
 
-def init(db: sqlite3.Connection, /, *, id: int | None = None, ts: bool = True) -> None:
+def init(
+    db: sqlite3.Connection, /, *, id: int | None = None, conf: Config = Config()
+) -> None:
     sql_ar_schema = _get_schema(db)
     tables = sql.symbols(parse_schema(sql_ar_schema))
     with closing(db.cursor()) as cursor:
         cursor.executescript(_CREATE_TABLES)
-        cursor.executescript(_synq_script_for(tables))
-        if not ts:
+        cursor.executescript(_synq_script_for(tables, conf))
+        if not conf.physical_clock:
             cursor.execute(f"DROP TRIGGER IF EXISTS  _synq_local_clock;")
     _allocate_id(db, id=id)
 
@@ -544,7 +568,7 @@ FROM extern._synq_undolog AS log JOIN main._synq_context AS ctx
 
 -- Conflict resolution
 
--- A. ON DELETE NO ACTION / RESTRICT
+-- A. ON DELETE RESTRICT
 
 -- A.1. mark active rows that reference deleted rows
 -- we start with concurrent active rows and use a recursive trigger
@@ -563,9 +587,9 @@ WHERE (
 );
 
 -- A.2. mark rows that are (directly/transitively) referenced by a
--- ON DELETE NO ACTION / RESTRICT ref
+-- ON DELETE RESTRICT ref
 UPDATE main._synq_fklog SET mark = 1
-WHERE mark = 0 AND (on_delete = 1 OR on_delete = 2);
+WHERE mark = 0 AND on_delete = 1;
 
 -- A.3. redo rows referenced by marked rows if undone
 INSERT INTO _synq_undolog_active(obj_ts, obj_peer)
@@ -580,7 +604,7 @@ UPDATE main._synq_fklog SET mark = NULL WHERE mark IS NOT NULL;
 
 -- B. ON UPDATE
 
--- B.1. ON UPDATE NO ACTION / RESTRICT
+-- B.1. ON UPDATE RESTRICT
 INSERT INTO main._synq_undolog_active(obj_peer, obj_ts)
 SELECT log.peer, log.ts
 FROM main._synq_log_active AS log JOIN
@@ -589,7 +613,7 @@ FROM main._synq_log_active AS log JOIN
         log.row_peer = fklog.foreign_row_peer AND
         log.tbl_index = fklog.foreign_index AND
         (log.ts > fklog.ts OR (log.ts = fklog.ts AND log.peer > fklog.peer))
-WHERE fklog.on_update = 1 OR fklog.on_update = 2;
+WHERE fklog.on_update = 1;
 
 -- B.2.. ON UPDATE SET NULL
 INSERT INTO main._synq_fklog_active(
@@ -603,7 +627,7 @@ FROM main._synq_log_active AS log JOIN main._synq_fklog AS fklog ON
     log.row_peer = fklog.foreign_row_peer AND
     log.tbl_index = fklog.foreign_index AND
     (log.ts > fklog.ts OR (log.ts = fklog.ts AND log.peer > fklog.peer))
-WHERE fklog.on_update = 4;
+WHERE fklog.on_update = 2;
 
 -- C. resolve uniqueness conflicts
 
@@ -646,7 +670,7 @@ WHERE (
 INSERT INTO main._synq_undolog_active(obj_ts, obj_peer)
 SELECT row_ts, row_peer
 FROM main._synq_fklog
-WHERE mark = 0 AND on_delete <> 4; -- except SET NULL
+WHERE mark = 0 AND on_delete <> 2; -- except SET NULL
 
 -- D.3. ON DELETE SET NULL
 INSERT INTO main._synq_fklog_active(
@@ -657,7 +681,7 @@ SELECT
     log.row_ts, log.row_peer, log.fk_id,
     log.on_delete, log.on_update, log.foreign_index
 FROM main._synq_fklog AS log
-WHERE mark = 0 AND on_delete = 4; -- only SET NULL
+WHERE mark = 0 AND on_delete = 2; -- only SET NULL
 
 -- D.4. un-mark remaining rows
 UPDATE _synq_fklog SET mark = NULL WHERE mark IS NOT NULL;

@@ -8,9 +8,12 @@ from dataclasses import dataclass
 from test_utils import exec, fetch, crr_from, Col, Ref, Undo, Crr
 
 
+_DEFAULT_CONF = crr.Config(physical_clock=False)
+
+
 def test_crr_init(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
         assert crr_from(a) == Crr(
             tbls={},
             ctx={1: 0},
@@ -21,7 +24,7 @@ def test_crr_init(tmp_path: pathlib.Path) -> None:
 def test_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
 
         exec(a, "INSERT INTO X VALUES(1)")
         assert crr_from(a) == Crr(
@@ -48,7 +51,7 @@ def test_aliased_rowid(tmp_path: pathlib.Path) -> None:
 def test_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
         exec(a, "CREATE TABLE X(v any)")
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
 
         exec(a, "INSERT INTO X VALUES('v1')")
         assert crr_from(a) == Crr(
@@ -72,7 +75,7 @@ def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
         exec(a, "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x))")
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
 
         exec(a, "INSERT INTO X VALUES(1)")
         exec(a, "INSERT INTO Y VALUES(1, 1)")
@@ -101,7 +104,7 @@ def test_fk_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
         exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
         exec(a, "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x))")
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
         exec(a, "INSERT INTO Y VALUES(1, 1)")
 
@@ -145,7 +148,7 @@ def test_fk_repl_multi_col(tmp_path: pathlib.Path) -> None:
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x1 integer, x2 integer, FOREIGN KEY(x1,x2) REFERENCES X(x1, x2))",
         )
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1, 2, 3)")
         exec(a, "INSERT INTO Y VALUES(1, 2, 3)")
 
@@ -195,7 +198,7 @@ def test_clone_to(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
 
         crr.clone_to(a, b, id=2)
         assert crr_from(b) == Crr(tbls={}, ctx={1: 0, 2: 0}, log=set())
@@ -205,7 +208,7 @@ def test_pull_from(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
 
         crr.clone_to(a, b, id=2)
         crr.pull_from(b, tmp_path / "a.db")
@@ -217,7 +220,7 @@ def test_pull_aliased_rowid(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b:
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY);")
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
 
         exec(a, "INSERT INTO X VALUES(1)")
@@ -250,7 +253,7 @@ def test_pull_repl_col(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b:
         exec(a, "CREATE TABLE X(v any)")
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
 
         exec(a, "INSERT INTO X VALUES('v1')")
@@ -279,7 +282,7 @@ def test_pull_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
     ) as b:
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
         exec(a, "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x))")
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
 
         exec(a, "INSERT INTO X VALUES(1)")
@@ -319,7 +322,7 @@ def test_concur_ins_aliased_rowid(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b:
         exec(a, "CREATE TABLE X(rowid integer PRIMARY KEY);")
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
         exec(a, "INSERT INTO X VALUES(1)")
         exec(b, "INSERT INTO X VALUES(1)")
@@ -354,7 +357,7 @@ def test_concur_ins_repl_col(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b:
         exec(a, "CREATE TABLE X(v any);")
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
         exec(a, "INSERT INTO X VALUES('a1')")
         exec(b, "INSERT INTO X VALUES('b1')")
@@ -400,7 +403,7 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
         exec(a, "CREATE TABLE X(v any PRIMARY KEY);")
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
         exec(a, "INSERT INTO X VALUES('v1')")
         assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 2)]
@@ -435,7 +438,7 @@ def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
         exec(a, "CREATE TABLE X(u any PRIMARY KEY, v any UNIQUE);")
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
         exec(a, "INSERT INTO X VALUES('u1', 'v1')")
         exec(a, "INSERT INTO X VALUES('u2', 'v2')")
@@ -484,7 +487,7 @@ def test_concur_del_fk_restrict_aliased_rowid(tmp_path: pathlib.Path) -> None:
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE RESTRICT)",
         )
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
         crr.clone_to(a, b, id=2)
         exec(a, "DELETE FROM X")
@@ -523,7 +526,7 @@ def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE RESTRICT)",
         )
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
         crr.clone_to(a, b, id=2)
         exec(a, "DELETE FROM X")
@@ -564,7 +567,7 @@ def test_concur_del_fk_cascade(tmp_path: pathlib.Path) -> None:
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE CASCADE)",
         )
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
         crr.clone_to(a, b, id=2)
         exec(a, "DELETE FROM X")
@@ -603,7 +606,7 @@ def test_concur_del_fk_set_null(tmp_path: pathlib.Path) -> None:
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE SET NULL)",
         )
-        crr.init(a, id=1, ts=False)
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
         crr.clone_to(a, b, id=2)
         exec(a, "DELETE FROM X")
