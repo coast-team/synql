@@ -473,3 +473,83 @@ def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(8, 1), obj=(4, 1), ul=1),
             },
         )
+
+
+def test_concur_del_fk_restrict_aliased_rowid(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
+        exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
+        exec(
+            a,
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE RESTRICT)",
+        )
+        crr.init(a, id=1, ts=False)
+        exec(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, id=2)
+        exec(a, "DELETE FROM X")
+        a.backup(a_bak)
+        exec(b, "INSERT INTO Y VALUES(1, 1)")
+
+        crr.pull_from(a, tmp_path / "b.db")
+        assert crr_from(a) == Crr(
+            tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
+            ctx={1: 4, 2: 3},
+            log={
+                Undo(ts=(2, 1), obj=(1, 1), ul=1),
+                Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
+                Undo(ts=(4, 1), obj=(1, 1), ul=2),
+            },
+        )
+
+        crr.pull_from(b, tmp_path / "a.bak.db")
+        assert crr_from(b) == Crr(
+            tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
+            ctx={1: 2, 2: 4},
+            log={
+                Undo(ts=(2, 1), obj=(1, 1), ul=1),
+                Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
+                Undo(ts=(4, 2), obj=(1, 1), ul=2),
+            },
+        )
+
+
+def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
+        exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
+        exec(
+            a,
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE RESTRICT)",
+        )
+        crr.init(a, id=1, ts=False)
+        exec(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, id=2)
+        exec(a, "DELETE FROM X")
+        a.backup(a_bak)
+        exec(b, "INSERT INTO Y VALUES(1, 1)")
+
+        crr.pull_from(a, tmp_path / "b.db")
+        assert crr_from(a) == Crr(
+            tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (3, 2))}},
+            ctx={1: 5, 2: 4},
+            log={
+                Col(ts=(2, 1), row=(1, 1), col=0, val=1),
+                Undo(ts=(3, 1), obj=(1, 1), ul=1),
+                Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
+                Undo(ts=(5, 1), obj=(1, 1), ul=2),
+            },
+        )
+
+        crr.pull_from(b, tmp_path / "a.bak.db")
+        assert crr_from(b) == Crr(
+            tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (3, 2))}},
+            ctx={1: 3, 2: 5},
+            log={
+                Col(ts=(2, 1), row=(1, 1), col=0, val=1),
+                Undo(ts=(3, 1), obj=(1, 1), ul=1),
+                Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
+                Undo(ts=(5, 2), obj=(1, 1), ul=2),
+            },
+        )

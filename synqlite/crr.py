@@ -688,8 +688,8 @@ def _create_pull(tables: sql.Symbols) -> str:
     for tbl in tables.values():
         tbl_name = tbl.name[0]
         repl_col_names = map(lambda col: col.name, utils.replicated_columns(tbl))
-        selectors: list[str] = []
-        col_names: list[str] = []
+        selectors: list[str] = ["id.rowid"]
+        col_names: list[str] = ["rowid"]
         for i, col_name in enumerate(repl_col_names):
             col_names += [col_name]
             selectors += [
@@ -752,34 +752,33 @@ def _create_pull(tables: sql.Symbols) -> str:
                         LIMIT 1
                     ) AS "{col_name}"'''
                     ]
-        if selectors == []:
-            merger += f"""
-            INSERT INTO main."{tbl_name}"(rowid)
-            SELECT id.rowid FROM (
-                SELECT DISTINCT id.rowid, id.row_peer, id.row_ts
-                FROM main."_synq_id_{tbl_name}" AS id
+        merger += f"""
+        INSERT INTO main."{tbl_name}"({', '.join(col_names)})
+        SELECT {', '.join(selectors)} FROM (
+            SELECT id.rowid, id.row_ts, id.row_peer FROM (
+                SELECT log.row_ts, log.row_peer
+                FROM  main._synq_log_active AS log
+                    JOIN _synq_context AS ctx
+                        ON log.peer = ctx.peer AND log.ts > ctx.ts
+                UNION
+                SELECT fklog.row_ts, fklog.row_peer
+                FROM  main._synq_fklog_active AS fklog
+                    JOIN _synq_context AS ctx
+                        ON fklog.peer = ctx.peer AND fklog.ts > ctx.ts
+                UNION
+                SELECT undo.obj_ts AS row_ts, undo.obj_peer AS row_peer
+                FROM main._synq_undolog_active_redo AS undo
                     JOIN main._synq_context AS ctx
-                        ON id.row_ts > ctx.ts AND id.row_peer = ctx.peer
-            ) AS id;
-            """
-        else:
-            merger += f"""
-            INSERT INTO main."{tbl_name}"(rowid, {', '.join(col_names)})
-            SELECT id.rowid, {', '.join(selectors)} FROM (
-                SELECT DISTINCT id.rowid, id.row_peer, id.row_ts FROM (
-                    SELECT log.row_peer, log.row_ts
-                    FROM  main._synq_log_active AS log
-                        JOIN _synq_context AS ctx
-                            ON log.peer = ctx.peer AND log.ts > ctx.ts
-                    UNION
-                    SELECT fklog.row_peer, fklog.row_ts
-                    FROM  main._synq_fklog_active AS fklog
-                        JOIN _synq_context AS ctx
-                            ON fklog.peer = ctx.peer AND fklog.ts > ctx.ts
-                ) JOIN main."_synq_id_{tbl_name}" AS id
-                    USING(row_ts, row_peer)
-            ) AS id;
-            """
+                        ON undo.ts > ctx.ts AND undo.peer = ctx.peer
+            ) JOIN main."_synq_id_{tbl_name}" AS id
+                USING(row_ts, row_peer)
+            UNION
+            SELECT id.rowid, id.row_ts, id.row_peer
+            FROM main."_synq_id_{tbl_name}" AS id
+                JOIN main._synq_context AS ctx
+                    ON id.row_ts > ctx.ts AND id.row_peer = ctx.peer
+        ) AS id;
+        """
         result += f"""
         -- Foreign keys must be disabled
 
