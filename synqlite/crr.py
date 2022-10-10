@@ -634,13 +634,10 @@ HAVING count(*) >= (
 UPDATE main._synq_fklog SET mark = 0
 FROM main._synq_context AS ctx, extern._synq_context AS ectx,
     _synq_undolog_active_undo AS undo
-WHERE ((
-        main._synq_fklog.ts > ctx.ts AND
-        main._synq_fklog.peer = ctx.peer
-    ) OR (
-        main._synq_fklog.ts > ectx.ts AND
-        main._synq_fklog.peer = ectx.peer
-)) AND (
+WHERE (
+    (undo.ts > ctx.ts AND undo.peer = ctx.peer) OR
+    (undo.ts > ectx.ts AND undo.peer = ectx.peer)
+) AND (
     undo.obj_ts = main._synq_fklog.foreign_row_ts AND
     undo.obj_peer = main._synq_fklog.foreign_row_peer
 );
