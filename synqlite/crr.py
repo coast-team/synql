@@ -168,10 +168,9 @@ CREATE VIEW         _synq_log_active AS
 SELECT log.rowid, log.* FROM _synq_log AS log
     WHERE NOT EXISTS(
         -- do not take undone log entries and rows into account
-        SELECT 1 FROM _synq_undolog AS undo
+        SELECT 1 FROM _synq_undolog_active_undo AS undo
         WHERE (undo.obj_ts = log.ts AND undo.obj_peer = log.peer) OR
             (undo.obj_ts = log.row_ts AND undo.obj_peer = log.row_peer)
-        GROUP BY undo.obj_ts, undo.obj_peer HAVING max(undo.ul)%2 = 1
     );
 
 DROP VIEW IF EXISTS _synq_fklog_active;
@@ -179,10 +178,9 @@ CREATE VIEW         _synq_fklog_active AS
 SELECT log.rowid, log.* FROM _synq_fklog AS log
     WHERE NOT EXISTS(
         -- do not take undone log entries and rows into account
-        SELECT 1 FROM _synq_undolog AS undo
+        SELECT 1 FROM _synq_undolog_active_undo AS undo
         WHERE (undo.obj_ts = log.ts AND undo.obj_peer = log.peer) OR
             (undo.obj_ts = log.row_ts AND undo.obj_peer = log.row_peer)
-        GROUP BY undo.obj_ts, undo.obj_peer HAVING max(undo.ul)%2 = 1
     );
 
 DROP TRIGGER IF EXISTS  _synq_fklog_active_insert;
@@ -831,7 +829,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                 UNION
                 SELECT log.row_ts, log.row_peer
                 FROM main._synq_context AS ctx
-                    JOIN main._synq_undolog AS undo
+                    JOIN main._synq_undolog_active AS undo
                         ON undo.ts > ctx.ts AND undo.peer = ctx.peer
                     JOIN main._synq_log AS log
                         ON undo.obj_ts = log.ts AND undo.obj_peer = log.peer
