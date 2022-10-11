@@ -831,7 +831,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                 UNION
                 SELECT log.row_ts, log.row_peer
                 FROM main._synq_context AS ctx
-                    JOIN main._synq_undolog_active_undo AS undo
+                    JOIN main._synq_undolog AS undo
                         ON undo.ts > ctx.ts AND undo.peer = ctx.peer
                     JOIN main._synq_log AS log
                         ON undo.obj_ts = log.ts AND undo.obj_peer = log.peer
