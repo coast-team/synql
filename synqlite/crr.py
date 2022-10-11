@@ -511,7 +511,7 @@ def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str) -> Non
     tables = sql.symbols(parse_schema(sql_ar_schema))
     merging = _create_pull(tables)
     result = f"""
-        PRAGMA defer_foreign_keys = ON;
+        PRAGMA defer_foreign_keys = ON;  -- automatically switch off at the end of transaction
         PRAGMA recursive_triggers = ON;
 
         ATTACH DATABASE '{remote_db_path}' AS extern;
@@ -526,7 +526,6 @@ def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str) -> Non
 
         DETACH DATABASE extern;
 
-        PRAGMA defer_foreign_keys = OFF;
         PRAGMA recursive_triggers = OFF;
         """
     result = textwrap.dedent(result)
@@ -544,6 +543,9 @@ UPDATE _synq_local SET ts = max(
 -- Add missing peers in the context with a ts of 0
 INSERT OR IGNORE INTO main._synq_context
 SELECT peer, 0 FROM extern._synq_context;
+
+INSERT OR IGNORE INTO extern._synq_context
+SELECT peer, 0 FROM main._synq_context;
 
 -- Add new id and log entries
 INSERT INTO main._synq_id
@@ -607,27 +609,62 @@ UPDATE main._synq_fklog SET mark = NULL WHERE mark IS NOT NULL;
 -- B.1. ON UPDATE RESTRICT
 INSERT INTO main._synq_undolog_active(obj_peer, obj_ts)
 SELECT log.peer, log.ts
-FROM main._synq_log_active AS log JOIN
-    main._synq_fklog AS fklog ON
-        log.row_ts = fklog.foreign_row_ts AND
-        log.row_peer = fklog.foreign_row_peer AND
-        log.tbl_index = fklog.foreign_index AND
-        (log.ts > fklog.ts OR (log.ts = fklog.ts AND log.peer > fklog.peer))
-WHERE fklog.on_update = 1;
+FROM main._synq_context AS ctx, extern._synq_context AS ectx,
+    main._synq_log_active AS log, main._synq_fklog_active AS fklog
+WHERE (
+    (log.ts > ctx.ts AND log.peer = ctx.peer) OR
+    (log.ts > ectx.ts AND log.peer = ectx.peer)
+) AND (
+    (fklog.ts > ctx.ts AND fklog.peer = ctx.peer) OR
+    (fklog.ts > ectx.ts AND fklog.peer = ectx.peer)
+) AND (
+    log.row_ts = fklog.foreign_row_ts AND
+    log.row_peer = fklog.foreign_row_peer AND
+    log.tbl_index = fklog.foreign_index
+) AND fklog.on_update = 1;
 
--- B.2.. ON UPDATE SET NULL
+
+-- B.2.. ON UPDATE CASCADE
+INSERT INTO main._synq_fklog_active(
+    row_ts, row_peer, fk_id,
+    on_delete, on_update, foreign_row_ts, foreign_row_peer, foreign_index
+) SELECT
+    fklog.row_ts, fklog.row_peer, fklog.fk_id,
+    fklog.on_delete, fklog.on_update, log.row_ts, log.row_peer, fklog.foreign_index
+FROM main._synq_context AS ctx, extern._synq_context AS ectx,
+    main._synq_log_active AS log, main._synq_fklog_active AS fklog
+WHERE (
+    (log.ts > ctx.ts AND log.peer = ctx.peer) OR
+    (log.ts > ectx.ts AND log.peer = ectx.peer)
+) AND (
+    (fklog.ts > ctx.ts AND fklog.peer = ctx.peer) OR
+    (fklog.ts > ectx.ts AND fklog.peer = ectx.peer)
+) AND (
+    log.row_ts = fklog.foreign_row_ts AND
+    log.row_peer = fklog.foreign_row_peer AND
+    log.tbl_index = fklog.foreign_index
+) AND fklog.on_update = 0;
+
+-- B.3.. ON UPDATE SET NULL
 INSERT INTO main._synq_fklog_active(
     row_ts, row_peer, fk_id,
     on_delete, on_update, foreign_index
 ) SELECT
     fklog.row_ts, fklog.row_peer, fklog.fk_id,
     fklog.on_delete, fklog.on_update, fklog.foreign_index
-FROM main._synq_log_active AS log JOIN main._synq_fklog AS fklog ON
+FROM main._synq_context AS ctx, extern._synq_context AS ectx,
+    main._synq_log_active AS log, main._synq_fklog_active AS fklog
+WHERE (
+    (log.ts > ctx.ts AND log.peer = ctx.peer) OR
+    (log.ts > ectx.ts AND log.peer = ectx.peer)
+) AND (
+    (fklog.ts > ctx.ts AND fklog.peer = ctx.peer) OR
+    (fklog.ts > ectx.ts AND fklog.peer = ectx.peer)
+) AND (
     log.row_ts = fklog.foreign_row_ts AND
     log.row_peer = fklog.foreign_row_peer AND
-    log.tbl_index = fklog.foreign_index AND
-    (log.ts > fklog.ts OR (log.ts = fklog.ts AND log.peer > fklog.peer))
-WHERE fklog.on_update = 2;
+    log.tbl_index = fklog.foreign_index
+) AND fklog.on_update = 2;
 
 -- C. resolve uniqueness conflicts
 
@@ -727,7 +764,7 @@ def _create_pull(tables: sql.Symbols) -> str:
             f_tbl = tables.get(f_tbl_name)
             assert f_tbl is not None
             f_repl_col_names = list(
-                map(lambda col: col.name, utils.replicated_columns(tbl))
+                map(lambda col: col.name, utils.replicated_columns(f_tbl))
             )
             ref_col_names = (
                 fk.referred_columns
@@ -739,10 +776,11 @@ def _create_pull(tables: sql.Symbols) -> str:
                 col_names += [fk.columns[0]]
                 selectors += [
                     f'''(
-                    SELECT rw.rowid FROM main._synq_fklog_active AS fklog
-                        JOIN main."_synq_id_{f_tbl_name}" AS rw
-                            ON fklog.foreign_row_ts = rw.row_ts AND
-                                fklog.foreign_row_peer = rw.row_peer
+                    SELECT rw.rowid
+                    FROM main._synq_fklog_active AS fklog
+                        LEFT JOIN main."_synq_id_{f_tbl_name}" AS rw
+                        ON fklog.foreign_row_ts = rw.row_ts AND
+                            fklog.foreign_row_peer = rw.row_peer
                     WHERE fklog.row_ts = id.row_ts AND
                         fklog.row_peer = id.row_peer AND
                         fklog.fk_id = {fk_id}
@@ -759,22 +797,21 @@ def _create_pull(tables: sql.Symbols) -> str:
                     col_names += [col_name]
                     selectors += [
                         f'''(
-                        SELECT val FROM main._synq_log_active AS log
-                        WHERE log.rowid IN (
-                            SELECT log.rowid FROM main._synq_log_active AS log
-                                JOIN main._synq_fklog_active AS fklog
-                                    ON log.row_ts = fklog.foreign_row_ts AND
-                                    log.row_peer = fklog.foreign_row_peer
-                            WHERE fklog.row_ts = id.row_ts AND
-                                fklog.row_peer = id.row_peer AND
-                                fklog.fk_id = {fk_id} AND log.col = {j}
-                        )
-                        ORDER BY log.ts DESC, log.peer DESC
+                        SELECT log.val
+                        FROM main._synq_fklog_active AS fklog
+                            LEFT JOIN main._synq_log_active AS log
+                                ON log.row_ts = fklog.foreign_row_ts AND
+                                log.row_peer = fklog.foreign_row_peer AND
+                                log.col = {j}
+                        WHERE fklog.row_ts = id.row_ts AND
+                            fklog.row_peer = id.row_peer AND
+                            fklog.fk_id = {fk_id}
+                        ORDER BY fklog.ts DESC, fklog.peer DESC, log.ts DESC, log.peer DESC
                         LIMIT 1
                     ) AS "{col_name}"'''
                     ]
         merger += f"""
-        INSERT INTO main."{tbl_name}"({', '.join(col_names)})
+        INSERT OR REPLACE INTO main."{tbl_name}"({', '.join(col_names)})
         SELECT {', '.join(selectors)} FROM (
             SELECT id.rowid, id.row_ts, id.row_peer FROM (
                 SELECT log.row_ts, log.row_peer
@@ -787,10 +824,17 @@ def _create_pull(tables: sql.Symbols) -> str:
                     JOIN _synq_context AS ctx
                         ON fklog.peer = ctx.peer AND fklog.ts > ctx.ts
                 UNION
-                SELECT undo.obj_ts AS row_ts, undo.obj_peer AS row_peer
-                FROM main._synq_undolog_active_redo AS undo
+                SELECT redo.obj_ts AS row_ts, redo.obj_peer AS row_peer
+                FROM main._synq_undolog_active_redo AS redo
                     JOIN main._synq_context AS ctx
+                        ON redo.ts > ctx.ts AND redo.peer = ctx.peer
+                UNION
+                SELECT log.row_ts, log.row_peer
+                FROM main._synq_context AS ctx
+                    JOIN main._synq_undolog_active_undo AS undo
                         ON undo.ts > ctx.ts AND undo.peer = ctx.peer
+                    JOIN main._synq_log AS log
+                        ON undo.obj_ts = log.ts AND undo.obj_peer = log.peer
             ) JOIN main."_synq_id_{tbl_name}" AS id
                 USING(row_ts, row_peer)
             UNION
@@ -814,26 +858,6 @@ def _create_pull(tables: sql.Symbols) -> str:
             SELECT id.rowid FROM main."_synq_id_{tbl_name}" AS id
                 JOIN main._synq_undolog_active_undo AS undo
                     ON id.row_ts = undo.obj_ts AND id.row_peer = undo.obj_peer
-        );
-
-        -- Delete updated rows and redone rows
-        -- This avoids uniqueness conflicts and simplify the merge
-        DELETE FROM main."{tbl_name}" WHERE rowid IN (
-            SELECT id.rowid FROM main._synq_context AS ctx
-                JOIN main._synq_log_active AS log
-                    ON log.ts > ctx.ts AND log.peer = ctx.peer 
-                JOIN main."_synq_id_{tbl_name}" AS id
-                    ON id.row_ts = log.row_ts AND id.row_peer = log.row_peer
-            UNION SELECT id.rowid FROM main._synq_context AS ctx
-                JOIN main._synq_fklog_active AS fklog
-                    ON fklog.ts > ctx.ts AND fklog.peer = ctx.peer
-                JOIN main."_synq_id_{tbl_name}" AS id
-                    ON id.row_ts = fklog.row_ts AND id.row_peer = fklog.row_peer
-            UNION SELECT id.rowid FROM main._synq_context AS ctx
-                JOIN main._synq_undolog_active_redo AS redo
-                    ON redo.ts > ctx.ts AND redo.peer = ctx.peer
-                JOIN main."_synq_id_{tbl_name}" AS id
-                    ON id.row_ts = redo.obj_ts AND id.row_peer = redo.obj_peer
         );
  
         -- Auto-assign local rowids for new active rows
