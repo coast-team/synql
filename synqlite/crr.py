@@ -203,11 +203,7 @@ END;
 
 DROP VIEW IF EXISTS _synq_undolog_active;
 CREATE VIEW         _synq_undolog_active AS
-SELECT undo.* FROM _synq_undolog AS undo WHERE NOT EXISTS(
-    SELECT 1 FROM _synq_undolog AS undo2
-    WHERE undo.obj_ts = undo2.obj_ts AND undo.obj_peer = undo2.obj_peer AND
-        undo2.ul > undo.ul
-);
+SELECT * FROM _synq_undolog GROUP BY obj_ts, obj_peer HAVING ul = max(ul);
 
 DROP VIEW IF EXISTS _synq_undolog_active_redo;
 CREATE VIEW         _synq_undolog_active_redo AS
