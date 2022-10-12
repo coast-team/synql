@@ -489,7 +489,7 @@ def init(
         cursor.executescript(_CREATE_TABLES)
         cursor.executescript(_synq_script_for(tables, conf))
         if not conf.physical_clock:
-            cursor.execute(f"DROP TRIGGER IF EXISTS  _synq_local_clock;")
+            cursor.execute(f"DROP TRIGGER IF EXISTS _synq_local_clock;")
     _allocate_id(db, id=id)
 
 
@@ -810,12 +810,12 @@ def _create_pull(tables: sql.Symbols) -> str:
         SELECT {', '.join(selectors)} FROM (
             SELECT id.rowid, id.row_ts, id.row_peer FROM (
                 SELECT log.row_ts, log.row_peer
-                FROM  main._synq_log_active AS log
+                FROM main._synq_log_active AS log
                     JOIN _synq_context AS ctx
                         ON log.peer = ctx.peer AND log.ts > ctx.ts
                 UNION
                 SELECT fklog.row_ts, fklog.row_peer
-                FROM  main._synq_fklog_active AS fklog
+                FROM main._synq_fklog_active AS fklog
                     JOIN _synq_context AS ctx
                         ON fklog.peer = ctx.peer AND fklog.ts > ctx.ts
                 UNION
