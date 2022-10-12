@@ -87,9 +87,9 @@ CREATE TABLE IF NOT EXISTS _synq_context(
 
 CREATE TABLE IF NOT EXISTS _synq_id(
     row_ts integer NOT NULL,
-    row_peer integer NOT NULL,
+    row_peer integer NOT NULL REFERENCES _synq_context(peer),
     tbl text NOT NULL,
-    PRIMARY KEY(row_ts, row_peer)
+    PRIMARY KEY(row_ts DESC, row_peer DESC)
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS _synq_log(
@@ -103,7 +103,9 @@ CREATE TABLE IF NOT EXISTS _synq_log(
     -- column of a composite key have the same index id
     -- WARNING: interleaved indexes are not supported
     tbl_index integer DEFAULT NULL,
-    PRIMARY KEY(ts, peer)
+    PRIMARY KEY(ts DESC, peer DESC),
+    FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
+        ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 DROP TRIGGER IF EXISTS  _synq_log_cleanup;
@@ -134,7 +136,11 @@ CREATE TABLE IF NOT EXISTS _synq_fklog(
     -- allow graph marking
     -- 0: on delete mark, 1: on update mark
     mark integer DEFAULT NULL,
-    PRIMARY KEY(ts, peer)
+    PRIMARY KEY(ts DESC, peer DESC),
+    FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY(foreign_row_ts, foreign_row_peer) REFERENCES _synq_id(row_ts, row_peer)
+        ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 DROP TRIGGER IF EXISTS  _synq_fklog_cleanup;
@@ -152,7 +158,7 @@ CREATE TABLE IF NOT EXISTS _synq_undolog(
     obj_ts integer NOT NULL,
     obj_peer integer NOT NULL,
     ul integer NOT NULL DEFAULT 0 CHECK(ul >= 0), -- undo length
-    PRIMARY KEY(ts, peer)
+    PRIMARY KEY(ts DESC, peer DESC)
 ) WITHOUT ROWID;
 
 DROP TRIGGER IF EXISTS  _synq_undolog_cleanup;

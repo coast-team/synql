@@ -23,6 +23,7 @@ def test_crr_init(tmp_path: pathlib.Path) -> None:
 
 def test_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
+        exec(a, "PRAGMA foreign_keys=ON")
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
 
@@ -50,6 +51,7 @@ def test_aliased_rowid(tmp_path: pathlib.Path) -> None:
 
 def test_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
+        exec(a, "PRAGMA foreign_keys=ON")
         exec(a, "CREATE TABLE X(v any)")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
 
@@ -251,6 +253,7 @@ def test_clone_to(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
+        exec(a, "PRAGMA foreign_keys=ON")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
 
         crr.clone_to(a, b, id=2)
@@ -261,6 +264,7 @@ def test_pull_from(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
+        exec(a, "PRAGMA foreign_keys=ON")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
 
         crr.clone_to(a, b, id=2)
@@ -272,6 +276,7 @@ def test_pull_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
+        exec(a, "PRAGMA foreign_keys=ON")
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY);")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
@@ -305,6 +310,7 @@ def test_pull_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
+        exec(a, "PRAGMA foreign_keys=ON")
         exec(a, "CREATE TABLE X(v any)")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
@@ -333,6 +339,7 @@ def test_pull_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
+        exec(a, "PRAGMA foreign_keys=ON")
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
         exec(a, "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x))")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
@@ -374,6 +381,7 @@ def test_concur_ins_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
+        exec(a, "PRAGMA foreign_keys=ON")
         exec(a, "CREATE TABLE X(rowid integer PRIMARY KEY);")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
@@ -409,6 +417,7 @@ def test_concur_ins_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
+        exec(a, "PRAGMA foreign_keys=ON")
         exec(a, "CREATE TABLE X(v any);")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
@@ -455,6 +464,7 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
+        exec(a, "PRAGMA foreign_keys=ON")
         exec(a, "CREATE TABLE X(v any PRIMARY KEY);")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
@@ -490,6 +500,7 @@ def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
+        exec(a, "PRAGMA foreign_keys=ON")
         exec(a, "CREATE TABLE X(u any PRIMARY KEY, v any UNIQUE);")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
