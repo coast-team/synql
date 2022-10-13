@@ -624,6 +624,53 @@ def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
         )
 
 
+def test_concur_del_fk_restrict_rec(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
+        exec(a, "PRAGMA foreign_keys=ON")
+        exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
+        exec(
+            a,
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE CASCADE)",
+        )
+        exec(
+            a,
+            "CREATE TABLE Z(z integer PRIMARY KEY, y integer REFERENCES Y(y) ON DELETE RESTRICT)",
+        )
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        exec(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, id=2)
+        exec(a, "DELETE FROM X")
+        a.backup(a_bak)
+        exec(b, "INSERT INTO Y VALUES(1, 1)")
+        exec(b, "INSERT INTO Z VALUES(1, 1)")
+
+        crr.pull_from(a, tmp_path / "b.db")
+        assert crr_from(a) == Crr(
+            tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}, "Z": {(1, 1, (4, 2))}},
+            ctx={1: 6, 2: 5},
+            log={
+                Undo(ts=(2, 1), obj=(1, 1), ul=1),
+                Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
+                Ref(ts=(5, 2), row=(4, 2), fk=0, target=(2, 2)),
+                Undo(ts=(6, 1), obj=(1, 1), ul=2),
+            },
+        )
+
+        crr.pull_from(b, tmp_path / "a.bak.db")
+        assert crr_from(b) == Crr(
+            tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}, "Z": {(1, 1, (4, 2))}},
+            ctx={1: 2, 2: 6},
+            log={
+                Undo(ts=(2, 1), obj=(1, 1), ul=1),
+                Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
+                Ref(ts=(5, 2), row=(4, 2), fk=0, target=(2, 2)),
+                Undo(ts=(6, 2), obj=(1, 1), ul=2),
+            },
+        )
+
+
 def test_concur_del_fk_cascade(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"

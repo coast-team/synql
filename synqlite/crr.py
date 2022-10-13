@@ -240,7 +240,7 @@ END;
 DROP TRIGGER IF EXISTS  _synq_fklog_on_delete_cascade_marking;
 CREATE TRIGGER          _synq_fklog_on_delete_cascade_marking
 AFTER UPDATE OF mark ON _synq_fklog WHEN (
-    OLD.mark <> 0 AND NEW.mark = 0 AND OLD.on_delete = 0 -- CASCADE
+    OLD.mark is NULL AND NEW.mark = 0 AND OLD.on_delete = 0 -- CASCADE
 )
 BEGIN
     UPDATE _synq_fklog SET mark = 0
@@ -249,7 +249,7 @@ END;
 
 DROP TRIGGER IF EXISTS  _synq_fklog_on_delete_restrict_marking;
 CREATE TRIGGER          _synq_fklog_on_delete_restrict_marking
-AFTER UPDATE OF mark ON _synq_fklog WHEN (OLD.mark <> 1 AND NEW.mark = 1)
+AFTER UPDATE OF mark ON _synq_fklog WHEN (OLD.mark = 0 AND NEW.mark = 1)
 BEGIN
     UPDATE _synq_fklog SET mark = 1
     WHERE row_ts = OLD.foreign_row_ts AND row_peer = OLD.foreign_row_peer AND
@@ -512,30 +512,29 @@ def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str) -> Non
     tables = sql.symbols(parse_schema(sql_ar_schema))
     merging = _create_pull(tables)
     result = f"""
+        PRAGMA recursive_triggers = ON;  -- automatically switch off at the end of db connection
         PRAGMA defer_foreign_keys = ON;  -- automatically switch off at the end of transaction
-        PRAGMA recursive_triggers = ON;
 
         ATTACH DATABASE '{remote_db_path}' AS extern;
 
         UPDATE main._synq_local SET is_merging = 1;
 
-        {_MERGE_PREPARATION}
+        {_PULL_EXTERN}
+        {_CONFLICT_RESOLUTION}
         {merging}
         {_MERGE_END}
 
         UPDATE main._synq_local SET is_merging = 0;
 
         DETACH DATABASE extern;
-
-        PRAGMA recursive_triggers = OFF;
         """
     result = textwrap.dedent(result)
     with closing(db.cursor()) as cursor:
         cursor.executescript(result)
 
 
-_MERGE_PREPARATION = """
--- Update clock
+_PULL_EXTERN = """
+-- update clock
 UPDATE _synq_local SET ts = max(
     main._synq_local.ts,
     (SELECT max(ts) FROM extern._synq_context)
@@ -568,16 +567,12 @@ INSERT INTO main._synq_undolog
 SELECT log.*
 FROM extern._synq_undolog AS log JOIN main._synq_context AS ctx
     ON log.ts > ctx.ts AND log.peer = ctx.peer;
+"""
 
--- Conflict resolution
-
--- A. ON DELETE RESTRICT
-
--- A.1. mark active rows that reference deleted rows
--- we start with concurrent active rows and use a recursive trigger
+_MARK_DANGLING_REFS = """
+-- Mark active rows that reference deleted rows.
+-- We start with concurrent active rows and use a recursive trigger
 -- to traverse the graph of references.
--- FIXME: we should use proper context merging (min?)
--- to avoid duplicas
 UPDATE main._synq_fklog SET mark = 0
 FROM main._synq_context AS ctx, extern._synq_context AS ectx,
     _synq_undolog_active_undo AS undo
@@ -588,6 +583,16 @@ WHERE (
     undo.obj_ts = main._synq_fklog.foreign_row_ts AND
     undo.obj_peer = main._synq_fklog.foreign_row_peer
 );
+"""
+
+
+_CONFLICT_RESOLUTION = f"""
+-- Conflict resolution
+
+-- A. ON DELETE RESTRICT
+
+-- A.1. mark active rows that reference deleted rows
+{_MARK_DANGLING_REFS}
 
 -- A.2. mark rows that are (directly/transitively) referenced by a
 -- ON DELETE RESTRICT ref
@@ -692,17 +697,7 @@ HAVING count(*) >= (
 -- D. ON DELETE CASCADE / SET NULL
 
 -- D.1. mark active rows that reference deleted rows (same as A.1.)
--- FIXME: same as A.1.
-UPDATE main._synq_fklog SET mark = 0
-FROM main._synq_context AS ctx, extern._synq_context AS ectx,
-    _synq_undolog_active_undo AS undo
-WHERE (
-    (undo.ts > ctx.ts AND undo.peer = ctx.peer) OR
-    (undo.ts > ectx.ts AND undo.peer = ectx.peer)
-) AND (
-    undo.obj_ts = main._synq_fklog.foreign_row_ts AND
-    undo.obj_peer = main._synq_fklog.foreign_row_peer
-);
+{_MARK_DANGLING_REFS}
 
 -- D.2. ON DELETE CASCADE
 INSERT INTO main._synq_undolog_active(obj_ts, obj_peer)
