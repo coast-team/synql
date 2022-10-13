@@ -828,3 +828,55 @@ def test_concur_up_fk_set_null(tmp_path: pathlib.Path) -> None:
                 Ref(ts=(5, 2), row=(3, 2), fk=0, target=(None, None)),
             },
         )
+
+
+def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
+        exec(a, "PRAGMA foreign_keys=ON")
+        exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
+        exec(
+            a,
+            "CREATE TABLE Y(x integer REFERENCES X(x) ON DELETE RESTRICT ON UPDATE CASCADE)",
+        )
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        exec(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, id=2)
+        exec(a, "UPDATE X SET x=2")
+        exec(a, "DELETE FROM X")
+        a.backup(a_bak)
+        exec(b, "INSERT INTO Y(x) VALUES(1)")
+        exec(b, "INSERT INTO X VALUES(2)")
+
+        crr.pull_from(a, tmp_path / "b.db")
+        assert crr_from(a) == Crr(
+            tbls={"X": {(2, (1, 1))}, "Y": {(2, (3, 2))}},
+            ctx={1: 9, 2: 6},
+            log={
+                Col(ts=(2, 1), row=(1, 1), col=0, val=1),
+                Col(ts=(3, 1), row=(1, 1), col=0, val=2),
+                Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
+                Col(ts=(6, 2), row=(5, 2), col=0, val=2),
+                Ref(ts=(8, 1), row=(3, 2), fk=0, target=(1, 1)),
+                Undo(ts=(4, 1), obj=(1, 1), ul=1),
+                Undo(ts=(7, 1), obj=(1, 1), ul=2),
+                Undo(ts=(9, 1), obj=(5, 2), ul=1),
+            },
+        )
+
+        crr.pull_from(b, tmp_path / "a.bak.db")
+        assert crr_from(b) == Crr(
+            tbls={"X": {(2, (1, 1))}, "Y": {(2, (3, 2))}},
+            ctx={1: 4, 2: 9},
+            log={
+                Col(ts=(2, 1), row=(1, 1), col=0, val=1),
+                Col(ts=(3, 1), row=(1, 1), col=0, val=2),
+                Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
+                Col(ts=(6, 2), row=(5, 2), col=0, val=2),
+                Ref(ts=(8, 2), row=(3, 2), fk=0, target=(1, 1)),
+                Undo(ts=(4, 1), obj=(1, 1), ul=1),
+                Undo(ts=(7, 2), obj=(1, 1), ul=2),
+                Undo(ts=(9, 2), obj=(5, 2), ul=1),
+            },
+        )
