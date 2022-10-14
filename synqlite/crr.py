@@ -651,11 +651,8 @@ SELECT log.peer, log.ts
 FROM main._synq_context AS ctx, extern._synq_context AS ectx,
     main._synq_log_active AS log, main._synq_fklog_effective AS fklog
 WHERE (
-    (log.ts > ctx.ts AND log.peer = ctx.peer) OR
-    (log.ts > ectx.ts AND log.peer = ectx.peer)
-) AND (
-    (fklog.ts > ctx.ts AND fklog.peer = ctx.peer) OR
-    (fklog.ts > ectx.ts AND fklog.peer = ectx.peer)
+    (log.ts > ctx.ts AND log.peer = ctx.peer AND fklog.ts > ectx.ts AND fklog.peer = ectx.peer) OR
+    (log.ts > ectx.ts AND log.peer = ectx.peer AND fklog.ts > ctx.ts AND fklog.peer = ctx.peer)
 ) AND (
     log.row_ts = fklog.foreign_row_ts AND
     log.row_peer = fklog.foreign_row_peer AND
@@ -673,11 +670,8 @@ INSERT INTO main._synq_fklog_effective(
 FROM main._synq_context AS ctx, extern._synq_context AS ectx,
     main._synq_log_effective AS log, main._synq_fklog_effective AS fklog
 WHERE (
-    (log.ts > ctx.ts AND log.peer = ctx.peer) OR
-    (log.ts > ectx.ts AND log.peer = ectx.peer)
-) AND (
-    (fklog.ts > ctx.ts AND fklog.peer = ctx.peer) OR
-    (fklog.ts > ectx.ts AND fklog.peer = ectx.peer)
+    (log.ts > ctx.ts AND log.peer = ctx.peer AND fklog.ts > ectx.ts AND fklog.peer = ectx.peer) OR
+    (log.ts > ectx.ts AND log.peer = ectx.peer AND fklog.ts > ctx.ts AND fklog.peer = ctx.peer)
 ) AND (
     log.row_ts = fklog.foreign_row_ts AND
     log.row_peer = fklog.foreign_row_peer AND
@@ -694,11 +688,8 @@ INSERT INTO main._synq_fklog_effective(
 FROM main._synq_context AS ctx, extern._synq_context AS ectx,
     main._synq_log_effective AS log, main._synq_fklog_effective AS fklog
 WHERE (
-    (log.ts > ctx.ts AND log.peer = ctx.peer) OR
-    (log.ts > ectx.ts AND log.peer = ectx.peer)
-) AND (
-    (fklog.ts > ctx.ts AND fklog.peer = ctx.peer) OR
-    (fklog.ts > ectx.ts AND fklog.peer = ectx.peer)
+    (log.ts > ctx.ts AND log.peer = ctx.peer AND fklog.ts > ectx.ts AND fklog.peer = ectx.peer) OR
+    (log.ts > ectx.ts AND log.peer = ectx.peer AND fklog.ts > ctx.ts AND fklog.peer = ctx.peer)
 ) AND (
     log.row_ts = fklog.foreign_row_ts AND
     log.row_peer = fklog.foreign_row_peer AND
@@ -715,11 +706,15 @@ FROM main._synq_log_effective AS log
     JOIN (
         SELECT * FROM main._synq_log_effective AS log
             JOIN _synq_id AS id USING(row_ts, row_peer)
-    ) AS self USING(tbl, col, tbl_index, val)
+    ) AS self USING(tbl, col, tbl_index, val),
+    main._synq_context AS ctx, extern._synq_context AS ectx
 WHERE tbl_index IS NOT NULL AND (
     log.row_ts > self.row_ts OR (
         log.row_ts = self.row_ts AND log.row_peer > self.row_peer
     )
+) AND (
+    (log.ts > ctx.ts AND log.peer = ctx.peer AND self.ts > ectx.ts AND self.peer = ectx.peer) OR
+    (log.ts > ectx.ts AND log.peer = ectx.peer AND self.ts > ctx.ts AND self.peer = ctx.peer)
 )
 GROUP BY log.row_ts, log.row_peer, self.row_ts, self.row_peer
 HAVING count(*) >= (
