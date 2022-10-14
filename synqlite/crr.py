@@ -228,7 +228,14 @@ END;
 
 DROP VIEW IF EXISTS _synq_undolog_active;
 CREATE VIEW         _synq_undolog_active AS
-SELECT * FROM _synq_undolog GROUP BY obj_ts, obj_peer HAVING ul = max(ul);
+SELECT * FROM _synq_undolog AS log
+WHERE NOT EXISTS (
+    SELECT 1 FROM _synq_undolog AS self
+    WHERE log.obj_ts = self.obj_ts AND log.obj_peer = self.obj_peer AND
+        self.ul >= log.ul AND (
+            self.ts > log.ts OR (self.ts = log.ts AND self.peer > log.peer)
+        )
+);
 
 DROP VIEW IF EXISTS _synq_undolog_active_redo;
 CREATE VIEW         _synq_undolog_active_redo AS
