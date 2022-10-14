@@ -469,7 +469,6 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
         exec(a, "INSERT INTO X VALUES('v1')")
-        assert fetch(a, "SELECT peer, ts FROM _synq_context") == [(1, 2)]
         exec(b, "INSERT INTO X VALUES('v1')")
         b.backup(b_bak)
 
@@ -492,6 +491,42 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
                 Col(ts=(2, 1), row=(1, 1), col=0, val="v1"),
                 Col(ts=(2, 2), row=(1, 2), col=0, val="v1"),
                 Undo(ts=(3, 1), obj=(1, 2), ul=1),
+            },
+        )
+
+
+def test_past_conflicting_keys(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
+        exec(a, "PRAGMA foreign_keys=ON")
+        exec(a, "CREATE TABLE X(v any PRIMARY KEY);")
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, id=2)
+        exec(a, "INSERT INTO X VALUES('v1')")
+        exec(a, "UPDATE X SET v = 'v2'")
+        exec(b, "INSERT INTO X VALUES('v1')")
+        b.backup(b_bak)
+
+        crr.pull_from(b, tmp_path / "a.db")
+        assert crr_from(b) == Crr(
+            tbls={"X": {("v2", (1, 1)), ("v1", (1, 2))}},
+            ctx={1: 3, 2: 2},
+            log={
+                Col(ts=(2, 1), row=(1, 1), col=0, val="v1"),
+                Col(ts=(3, 1), row=(1, 1), col=0, val="v2"),
+                Col(ts=(2, 2), row=(1, 2), col=0, val="v1"),
+            },
+        )
+
+        crr.pull_from(a, tmp_path / "b.bak.db")
+        assert crr_from(a) == Crr(
+            tbls={"X": {("v2", (1, 1)), ("v1", (1, 2))}},
+            ctx={1: 3, 2: 2},
+            log={
+                Col(ts=(2, 1), row=(1, 1), col=0, val="v1"),
+                Col(ts=(3, 1), row=(1, 1), col=0, val="v2"),
+                Col(ts=(2, 2), row=(1, 2), col=0, val="v1"),
             },
         )
 
@@ -578,6 +613,48 @@ def test_concur_del_fk_restrict_aliased_rowid(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
                 Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
                 Undo(ts=(4, 2), obj=(1, 1), ul=2),
+            },
+        )
+
+
+def test_concur_past_del_fk_restrict(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
+        exec(a, "PRAGMA foreign_keys=ON")
+        exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
+        exec(
+            a,
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE RESTRICT)",
+        )
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        exec(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, id=2)
+        exec(a, "DELETE FROM X")
+        a.backup(a_bak)
+        exec(b, "INSERT INTO Y VALUES(1, 1)")
+        exec(b, "INSERT INTO X VALUES(2)")
+        exec(b, "UPDATE Y SET x = 2")
+
+        crr.pull_from(a, tmp_path / "b.db")
+        assert crr_from(a) == Crr(
+            tbls={"X": {(1, (4, 2))}, "Y": {(1, 1, (2, 2))}},
+            ctx={1: 2, 2: 5},
+            log={
+                Undo(ts=(2, 1), obj=(1, 1), ul=1),
+                Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
+                Ref(ts=(5, 2), row=(2, 2), fk=0, target=(4, 2)),
+            },
+        )
+
+        crr.pull_from(b, tmp_path / "a.bak.db")
+        assert crr_from(b) == Crr(
+            tbls={"X": {(2, (4, 2))}, "Y": {(1, 2, (2, 2))}},
+            ctx={1: 2, 2: 5},
+            log={
+                Undo(ts=(2, 1), obj=(1, 1), ul=1),
+                Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
+                Ref(ts=(5, 2), row=(2, 2), fk=0, target=(4, 2)),
             },
         )
 

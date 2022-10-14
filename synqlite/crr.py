@@ -173,26 +173,44 @@ END;
 DROP VIEW IF EXISTS _synq_log_active;
 CREATE VIEW         _synq_log_active AS
 SELECT log.rowid, log.* FROM _synq_log AS log
-    WHERE NOT EXISTS(
-        -- do not take undone log entries and rows into account
-        SELECT 1 FROM _synq_undolog_active_undo AS undo
-        WHERE (undo.obj_ts = log.ts AND undo.obj_peer = log.peer) OR
-            (undo.obj_ts = log.row_ts AND undo.obj_peer = log.row_peer)
-    );
+WHERE NOT EXISTS(
+    -- do not take undone log entries and undone rows into account
+    SELECT 1 FROM _synq_undolog_active_undo AS undo
+    WHERE (undo.obj_ts = log.ts AND undo.obj_peer = log.peer) OR
+        (undo.obj_ts = log.row_ts AND undo.obj_peer = log.row_peer)
+);
+
+DROP VIEW IF EXISTS _synq_log_effective;
+CREATE VIEW         _synq_log_effective AS
+SELECT log.rowid, log.* FROM _synq_log_active AS log
+WHERE NOT EXISTS(
+    SELECT 1 FROM _synq_log_active AS self
+    WHERE self.row_ts = log.row_ts AND self.row_peer = log.row_peer AND self.col = log.col AND
+        (self.ts > log.ts OR (self.ts = log.ts AND self.peer > log.peer))
+);
 
 DROP VIEW IF EXISTS _synq_fklog_active;
 CREATE VIEW         _synq_fklog_active AS
 SELECT log.rowid, log.* FROM _synq_fklog AS log
-    WHERE NOT EXISTS(
-        -- do not take undone log entries and rows into account
-        SELECT 1 FROM _synq_undolog_active_undo AS undo
-        WHERE (undo.obj_ts = log.ts AND undo.obj_peer = log.peer) OR
-            (undo.obj_ts = log.row_ts AND undo.obj_peer = log.row_peer)
-    );
+WHERE NOT EXISTS(
+    -- do not take undone log entries and rows into account
+    SELECT 1 FROM _synq_undolog_active_undo AS undo
+    WHERE (undo.obj_ts = log.ts AND undo.obj_peer = log.peer) OR
+        (undo.obj_ts = log.row_ts AND undo.obj_peer = log.row_peer)
+);
 
-DROP TRIGGER IF EXISTS  _synq_fklog_active_insert;
-CREATE TRIGGER          _synq_fklog_active_insert
-INSTEAD OF INSERT ON _synq_fklog_active WHEN (
+DROP VIEW IF EXISTS _synq_fklog_effective;
+CREATE VIEW         _synq_fklog_effective AS
+SELECT log.rowid, log.* FROM _synq_fklog_active AS log
+WHERE NOT EXISTS(
+    SELECT 1 FROM _synq_fklog_active AS self
+    WHERE self.row_ts = log.row_ts AND self.row_peer = log.row_peer AND self.fk_id = log.fk_id AND
+        (self.ts > log.ts OR (self.ts = log.ts AND self.peer > log.peer))
+);
+
+DROP TRIGGER IF EXISTS  _synq_fklog_effective_insert;
+CREATE TRIGGER          _synq_fklog_effective_insert
+INSTEAD OF INSERT ON _synq_fklog_effective WHEN (
     NEW.peer IS NULL AND NEW.ts IS NULL
 )
 BEGIN
@@ -244,7 +262,11 @@ AFTER UPDATE OF mark ON _synq_fklog WHEN (
 )
 BEGIN
     UPDATE _synq_fklog SET mark = 0
-    WHERE foreign_row_ts = OLD.row_ts AND foreign_row_peer = OLD.row_peer;
+    WHERE foreign_row_ts = OLD.row_ts AND foreign_row_peer = OLD.row_peer AND
+        EXISTS (
+            SELECT 1 FROM _synq_fklog_effective AS log
+            WHERE _synq_fklog.rowid = log.rowid
+        );
 END;
 
 DROP TRIGGER IF EXISTS  _synq_fklog_on_delete_restrict_marking;
@@ -582,6 +604,9 @@ WHERE (
 ) AND (
     undo.obj_ts = main._synq_fklog.foreign_row_ts AND
     undo.obj_peer = main._synq_fklog.foreign_row_peer
+) AND EXISTS (
+    SELECT 1 FROM main._synq_fklog_effective AS log
+    WHERE main._synq_fklog.rowid = log.rowid
 );
 """
 
@@ -616,7 +641,7 @@ UPDATE main._synq_fklog SET mark = NULL WHERE mark IS NOT NULL;
 INSERT INTO main._synq_undolog_active(obj_peer, obj_ts)
 SELECT log.peer, log.ts
 FROM main._synq_context AS ctx, extern._synq_context AS ectx,
-    main._synq_log_active AS log, main._synq_fklog_active AS fklog
+    main._synq_log_effective AS log, main._synq_fklog_effective AS fklog
 WHERE (
     (log.ts > ctx.ts AND log.peer = ctx.peer) OR
     (log.ts > ectx.ts AND log.peer = ectx.peer)
@@ -631,14 +656,14 @@ WHERE (
 
 
 -- B.2.. ON UPDATE CASCADE
-INSERT INTO main._synq_fklog_active(
+INSERT INTO main._synq_fklog_effective(
     row_ts, row_peer, fk_id,
     on_delete, on_update, foreign_row_ts, foreign_row_peer, foreign_index
 ) SELECT
     fklog.row_ts, fklog.row_peer, fklog.fk_id,
     fklog.on_delete, fklog.on_update, log.row_ts, log.row_peer, fklog.foreign_index
 FROM main._synq_context AS ctx, extern._synq_context AS ectx,
-    main._synq_log_active AS log, main._synq_fklog_active AS fklog
+    main._synq_log_effective AS log, main._synq_fklog_effective AS fklog
 WHERE (
     (log.ts > ctx.ts AND log.peer = ctx.peer) OR
     (log.ts > ectx.ts AND log.peer = ectx.peer)
@@ -652,14 +677,14 @@ WHERE (
 ) AND fklog.on_update = 0;
 
 -- B.3.. ON UPDATE SET NULL
-INSERT INTO main._synq_fklog_active(
+INSERT INTO main._synq_fklog_effective(
     row_ts, row_peer, fk_id,
     on_delete, on_update, foreign_index
 ) SELECT
     fklog.row_ts, fklog.row_peer, fklog.fk_id,
     fklog.on_delete, fklog.on_update, fklog.foreign_index
 FROM main._synq_context AS ctx, extern._synq_context AS ectx,
-    main._synq_log_active AS log, main._synq_fklog_active AS fklog
+    main._synq_log_effective AS log, main._synq_fklog_effective AS fklog
 WHERE (
     (log.ts > ctx.ts AND log.peer = ctx.peer) OR
     (log.ts > ectx.ts AND log.peer = ectx.peer)
@@ -677,10 +702,10 @@ WHERE (
 -- undo latest rows with conflicting unique keys
 INSERT INTO main._synq_undolog_active(obj_ts, obj_peer)
 SELECT DISTINCT log.row_ts, log.row_peer
-FROM main._synq_log_active AS log
+FROM main._synq_log_effective AS log
     JOIN main._synq_id AS id USING(row_ts, row_peer)
     JOIN (
-        SELECT * FROM main._synq_log_active AS log
+        SELECT * FROM main._synq_log_effective AS log
             JOIN _synq_id AS id USING(row_ts, row_peer)
     ) AS self USING(tbl, col, tbl_index, val)
 WHERE tbl_index IS NOT NULL AND (
@@ -690,7 +715,7 @@ WHERE tbl_index IS NOT NULL AND (
 )
 GROUP BY log.row_ts, log.row_peer, self.row_ts, self.row_peer
 HAVING count(*) >= (
-    SELECT count(DISTINCT col) FROM _synq_log_active
+    SELECT count(DISTINCT col) FROM _synq_log_effective
     WHERE row_ts = log.row_ts AND row_peer = log.row_peer AND tbl_index = log.tbl_index
 );
 
@@ -706,7 +731,7 @@ FROM main._synq_fklog
 WHERE mark = 0 AND on_delete <> 2; -- except SET NULL
 
 -- D.3. ON DELETE SET NULL
-INSERT INTO main._synq_fklog_active(
+INSERT INTO main._synq_fklog_effective(
     row_ts, row_peer, fk_id,
     on_delete, on_update, foreign_index
 )
