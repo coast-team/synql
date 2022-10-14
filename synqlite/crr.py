@@ -645,10 +645,11 @@ UPDATE main._synq_fklog SET mark = NULL WHERE mark IS NOT NULL;
 -- B. ON UPDATE
 
 -- B.1. ON UPDATE RESTRICT
+-- undo all concurrent updates to a restrict ref
 INSERT INTO main._synq_undolog_active(obj_peer, obj_ts)
 SELECT log.peer, log.ts
 FROM main._synq_context AS ctx, extern._synq_context AS ectx,
-    main._synq_log_effective AS log, main._synq_fklog_effective AS fklog
+    main._synq_log_active AS log, main._synq_fklog_effective AS fklog
 WHERE (
     (log.ts > ctx.ts AND log.peer = ctx.peer) OR
     (log.ts > ectx.ts AND log.peer = ectx.peer)
