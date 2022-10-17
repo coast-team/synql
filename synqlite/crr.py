@@ -141,7 +141,9 @@ CREATE TABLE IF NOT EXISTS _synq_undolog(
 
 DROP VIEW IF EXISTS _synq_log_active;
 CREATE VIEW         _synq_log_active AS
-SELECT log.rowid, log.* FROM _synq_log AS log
+SELECT log.*, id.tbl
+FROM _synq_log AS log LEFT JOIN _synq_id AS id
+    USING(row_ts, row_peer)
 WHERE NOT EXISTS(
     -- do not take undone log entries and undone rows into account
     SELECT 1 FROM _synq_undolog AS undo
@@ -153,7 +155,7 @@ WHERE NOT EXISTS(
 
 DROP VIEW IF EXISTS _synq_log_effective;
 CREATE VIEW         _synq_log_effective AS
-SELECT log.rowid, log.* FROM _synq_log_active AS log
+SELECT log.* FROM _synq_log_active AS log
 WHERE NOT EXISTS(
     SELECT 1 FROM _synq_log_active AS self
     WHERE self.row_ts = log.row_ts AND self.row_peer = log.row_peer AND self.col = log.col AND
@@ -162,23 +164,25 @@ WHERE NOT EXISTS(
 
 DROP VIEW IF EXISTS _synq_fklog_active;
 CREATE VIEW         _synq_fklog_active AS
-SELECT log.rowid, log.* FROM _synq_fklog AS log
+SELECT fklog.*, id.tbl
+FROM _synq_fklog AS fklog LEFT JOIN _synq_id AS id
+    USING(row_ts, row_peer)
 WHERE NOT EXISTS(
-    -- do not take undone log entries and rows into account
+    -- do not take undone fklog entries and rows into account
     SELECT 1 FROM _synq_undolog AS undo
     WHERE undo.is_deleted AND (
-        (undo.obj_ts = log.ts AND undo.obj_peer = log.peer) OR
-        (undo.obj_ts = log.row_ts AND undo.obj_peer = log.row_peer)
+        (undo.obj_ts = fklog.ts AND undo.obj_peer = fklog.peer) OR
+        (undo.obj_ts = fklog.row_ts AND undo.obj_peer = fklog.row_peer)
     )
 );
 
 DROP VIEW IF EXISTS _synq_fklog_effective;
 CREATE VIEW         _synq_fklog_effective AS
-SELECT log.rowid, log.* FROM _synq_fklog_active AS log
+SELECT fklog.* FROM _synq_fklog_active AS fklog
 WHERE NOT EXISTS(
     SELECT 1 FROM _synq_fklog_active AS self
-    WHERE self.row_ts = log.row_ts AND self.row_peer = log.row_peer AND self.fk_id = log.fk_id AND
-        (self.ts > log.ts OR (self.ts = log.ts AND self.peer > log.peer))
+    WHERE self.row_ts = fklog.row_ts AND self.row_peer = fklog.row_peer AND self.fk_id = fklog.fk_id AND
+        (self.ts > fklog.ts OR (self.ts = fklog.ts AND self.peer > fklog.peer))
 );
 
 DROP TRIGGER IF EXISTS  _synq_fklog_effective_insert;
@@ -230,8 +234,8 @@ BEGIN
     UPDATE _synq_fklog SET mark = 0
     WHERE foreign_row_ts = OLD.row_ts AND foreign_row_peer = OLD.row_peer AND
         EXISTS (
-            SELECT 1 FROM _synq_fklog_effective AS log
-            WHERE _synq_fklog.rowid = log.rowid
+            SELECT 1 FROM _synq_fklog_effective AS fklog
+            WHERE _synq_fklog.ts = fklog.ts AND _synq_fklog.peer = fklog.peer
         );
 END;
 
@@ -554,9 +558,9 @@ FROM extern._synq_log AS log JOIN main._synq_context AS ctx
     ON log.ts > ctx.ts AND log.peer = ctx.peer;
 
 INSERT INTO main._synq_fklog
-SELECT log.*
-FROM extern._synq_fklog AS log JOIN main._synq_context AS ctx
-    ON log.ts > ctx.ts AND log.peer = ctx.peer;
+SELECT fklog.*
+FROM extern._synq_fklog AS fklog JOIN main._synq_context AS ctx
+    ON fklog.ts > ctx.ts AND fklog.peer = ctx.peer;
 
 INSERT INTO main._synq_undolog(ts, peer, obj_ts, obj_peer, ul)
 SELECT log.ts, log.peer, log.obj_ts, log.obj_peer, log.ul
@@ -574,7 +578,7 @@ _MARK_DANGLING_REFS = """
 -- to traverse the graph of references.
 UPDATE main._synq_fklog SET mark = 0
 FROM main._synq_context AS ctx, extern._synq_context AS ectx,
-    _synq_undolog AS undo
+    main._synq_undolog AS undo
 WHERE undo.is_deleted AND (
     (undo.ts > ctx.ts AND undo.peer = ctx.peer) OR
     (undo.ts > ectx.ts AND undo.peer = ectx.peer)
@@ -582,8 +586,8 @@ WHERE undo.is_deleted AND (
     undo.obj_ts = main._synq_fklog.foreign_row_ts AND
     undo.obj_peer = main._synq_fklog.foreign_row_peer
 ) AND EXISTS (
-    SELECT 1 FROM main._synq_fklog_effective AS log
-    WHERE main._synq_fklog.rowid = log.rowid
+    SELECT 1 FROM main._synq_fklog_effective AS fklog
+    WHERE main._synq_fklog.ts = fklog.ts AND main._synq_fklog.peer = fklog.peer
 );
 """
 
@@ -604,10 +608,10 @@ WHERE mark = 0 AND on_delete = 1;
 -- A.3. redo rows referenced by marked rows if undone
 INSERT INTO _synq_undolog_active(obj_ts, obj_peer)
 SELECT undo.obj_ts, undo.obj_peer
-FROM _synq_undolog AS undo JOIN _synq_fklog AS fk ON
-    undo.obj_ts = fk.foreign_row_ts AND
-    undo.obj_peer = fk.foreign_row_peer
-WHERE fk.mark = 1 AND undo.is_deleted;
+FROM _synq_undolog AS undo JOIN _synq_fklog AS fklog ON
+    undo.obj_ts = fklog.foreign_row_ts AND
+    undo.obj_peer = fklog.foreign_row_peer
+WHERE fklog.mark = 1 AND undo.is_deleted;
 
 -- A.4. un-mark remaining rows
 UPDATE main._synq_fklog SET mark = NULL WHERE mark IS NOT NULL;
@@ -671,12 +675,8 @@ WHERE (
 -- undo latest rows with conflicting unique keys
 INSERT INTO main._synq_undolog_active(obj_ts, obj_peer)
 SELECT DISTINCT log.row_ts, log.row_peer
-FROM main._synq_log_effective AS log
-    JOIN main._synq_id AS id USING(row_ts, row_peer)
-    JOIN (
-        SELECT * FROM main._synq_log_effective AS log
-            JOIN _synq_id AS id USING(row_ts, row_peer)
-    ) AS self USING(tbl, col, tbl_index, val),
+FROM main._synq_log_effective AS log JOIN main._synq_log_effective AS self
+        USING(tbl, col, tbl_index, val),
     main._synq_context AS ctx, extern._synq_context AS ectx
 WHERE tbl_index IS NOT NULL AND (
     log.row_ts > self.row_ts OR (
@@ -709,10 +709,10 @@ INSERT INTO main._synq_fklog_effective(
     on_delete, on_update, foreign_index
 )
 SELECT
-    log.row_ts, log.row_peer, log.fk_id,
-    log.on_delete, log.on_update, log.foreign_index
-FROM main._synq_fklog AS log
-WHERE mark = 0 AND on_delete = 2; -- only SET NULL
+    fklog.row_ts, fklog.row_peer, fklog.fk_id,
+    fklog.on_delete, fklog.on_update, fklog.foreign_index
+FROM main._synq_fklog AS fklog
+WHERE fklog.mark = 0 AND fklog.on_delete = 2; -- only SET NULL
 
 -- D.4. un-mark remaining rows
 UPDATE _synq_fklog SET mark = NULL WHERE mark IS NOT NULL;
