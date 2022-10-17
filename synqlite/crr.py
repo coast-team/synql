@@ -280,7 +280,9 @@ def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols, conf: Config) -> str
         {maybe_rowid_alias}
         row_ts integer NOT NULL,
         row_peer integer NOT NULL,
-        UNIQUE(row_ts, row_peer)
+        UNIQUE(row_ts, row_peer),
+        FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
+            ON DELETE RESTRICT ON UPDATE CASCADE
     );
 
     DROP TRIGGER IF EXISTS "_synq_id_update_{tbl_name}_pk_";
@@ -303,8 +305,14 @@ def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols, conf: Config) -> str
     AFTER DELETE ON "_synq_id_{tbl_name}"
     WHEN (SELECT NOT is_merging FROM _synq_local)
     BEGIN
-        INSERT INTO _synq_undolog_active(obj_ts, obj_peer)
-        VALUES(OLD.row_ts, OLD.row_peer);
+        UPDATE _synq_local SET ts = ts + 1;
+
+        INSERT INTO _synq_undolog(ts, peer, obj_ts, obj_peer, ul)
+        SELECT local.ts, local.peer, OLD.row_ts, OLD.row_peer, 1
+        FROM _synq_local AS local
+        WHERE true  -- avoid parsing ambiguity
+        ON CONFLICT(obj_ts, obj_peer)
+        DO UPDATE SET ul = ul + 1, ts = excluded.ts, peer = excluded.peer;
     END;
     """
     triggers = ""
