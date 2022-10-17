@@ -599,7 +599,6 @@ def test_concur_del_fk_restrict_aliased_rowid(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 4, 2: 3},
             log={
-                Undo(ts=(2, 1), obj=(1, 1), ul=1),
                 Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
                 Undo(ts=(4, 1), obj=(1, 1), ul=2),
             },
@@ -610,7 +609,6 @@ def test_concur_del_fk_restrict_aliased_rowid(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 2, 2: 4},
             log={
-                Undo(ts=(2, 1), obj=(1, 1), ul=1),
                 Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
                 Undo(ts=(4, 2), obj=(1, 1), ul=2),
             },
@@ -682,7 +680,6 @@ def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
             ctx={1: 5, 2: 4},
             log={
                 Col(ts=(2, 1), row=(1, 1), col=0, val=1),
-                Undo(ts=(3, 1), obj=(1, 1), ul=1),
                 Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
                 Undo(ts=(5, 1), obj=(1, 1), ul=2),
             },
@@ -694,7 +691,6 @@ def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
             ctx={1: 3, 2: 5},
             log={
                 Col(ts=(2, 1), row=(1, 1), col=0, val=1),
-                Undo(ts=(3, 1), obj=(1, 1), ul=1),
                 Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
                 Undo(ts=(5, 2), obj=(1, 1), ul=2),
             },
@@ -728,7 +724,6 @@ def test_concur_del_fk_restrict_rec(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}, "Z": {(1, 1, (4, 2))}},
             ctx={1: 6, 2: 5},
             log={
-                Undo(ts=(2, 1), obj=(1, 1), ul=1),
                 Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
                 Ref(ts=(5, 2), row=(4, 2), fk=0, target=(2, 2)),
                 Undo(ts=(6, 1), obj=(1, 1), ul=2),
@@ -740,7 +735,6 @@ def test_concur_del_fk_restrict_rec(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}, "Z": {(1, 1, (4, 2))}},
             ctx={1: 2, 2: 6},
             log={
-                Undo(ts=(2, 1), obj=(1, 1), ul=1),
                 Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
                 Ref(ts=(5, 2), row=(4, 2), fk=0, target=(2, 2)),
                 Undo(ts=(6, 2), obj=(1, 1), ul=2),
@@ -1030,7 +1024,6 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
                 Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
                 Col(ts=(6, 2), row=(5, 2), col=0, val=2),
                 Ref(ts=(8, 1), row=(3, 2), fk=0, target=(1, 1)),
-                Undo(ts=(4, 1), obj=(1, 1), ul=1),
                 Undo(ts=(7, 1), obj=(1, 1), ul=2),
                 Undo(ts=(9, 1), obj=(5, 2), ul=1),
             },
@@ -1046,7 +1039,6 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
                 Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
                 Col(ts=(6, 2), row=(5, 2), col=0, val=2),
                 Ref(ts=(8, 2), row=(3, 2), fk=0, target=(1, 1)),
-                Undo(ts=(4, 1), obj=(1, 1), ul=1),
                 Undo(ts=(7, 2), obj=(1, 1), ul=2),
                 Undo(ts=(9, 2), obj=(5, 2), ul=1),
             },

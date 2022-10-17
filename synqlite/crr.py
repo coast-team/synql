@@ -54,8 +54,7 @@ CREATE TABLE IF NOT EXISTS _synq_local(
     peer integer NOT NULL DEFAULT (random() >> 16), -- 48bits of entropy
     ts integer NOT NULL DEFAULT 0 CHECK(ts >= 0),
     is_merging integer NOT NULL DEFAULT 0 CHECK(is_merging & 1 = is_merging),
-    logcleanup integer NOT NULL DEFAULT 0 CHECK(logcleanup & 1 = logcleanup),
-    undocleanup integer NOT NULL DEFAULT 0 CHECK(undocleanup & 1 = undocleanup)
+    logcleanup integer NOT NULL DEFAULT 0 CHECK(logcleanup & 1 = logcleanup)
 );
 
 INSERT INTO _synq_local DEFAULT VALUES;
@@ -158,17 +157,9 @@ CREATE TABLE IF NOT EXISTS _synq_undolog(
     obj_ts integer NOT NULL,
     obj_peer integer NOT NULL,
     ul integer NOT NULL DEFAULT 0 CHECK(ul >= 0), -- undo length
-    PRIMARY KEY(ts DESC, peer DESC)
+    PRIMARY KEY(ts DESC, peer DESC),
+    UNIQUE(obj_ts, obj_peer)
 ) WITHOUT ROWID;
-
-DROP TRIGGER IF EXISTS  _synq_undolog_cleanup;
-CREATE TRIGGER          _synq_undolog_cleanup
-AFTER INSERT ON _synq_undolog WHEN (SELECT (logcleanup OR undocleanup) FROM _synq_local)
-BEGIN
-    -- Delete shadowed entries
-    DELETE FROM _synq_undolog WHERE (ts <> NEW.ts OR peer <> NEW.peer) AND
-        obj_ts = NEW.obj_ts AND obj_peer = NEW.obj_peer AND ul <= NEW.ul;
-END;
 
 DROP VIEW IF EXISTS _synq_log_active;
 CREATE VIEW         _synq_log_active AS
@@ -228,14 +219,7 @@ END;
 
 DROP VIEW IF EXISTS _synq_undolog_active;
 CREATE VIEW         _synq_undolog_active AS
-SELECT * FROM _synq_undolog AS log
-WHERE NOT EXISTS (
-    SELECT 1 FROM _synq_undolog AS self
-    WHERE log.obj_ts = self.obj_ts AND log.obj_peer = self.obj_peer AND
-        self.ul >= log.ul AND (
-            self.ts > log.ts OR (self.ts = log.ts AND self.peer > log.peer)
-        )
-);
+SELECT * FROM _synq_undolog;
 
 DROP VIEW IF EXISTS _synq_undolog_active_redo;
 CREATE VIEW         _synq_undolog_active_redo AS
@@ -248,16 +232,17 @@ SELECT * FROM _synq_undolog_active WHERE ul%2 = 1;
 DROP TRIGGER IF EXISTS  _synq_undolog_active_insert;
 CREATE TRIGGER          _synq_undolog_active_insert
 INSTEAD OF INSERT ON _synq_undolog_active WHEN (
-    NEW.peer IS NULL AND NEW.ts IS NULL
+    NEW.ts IS NULL AND NEW.peer IS NULL AND NEW.ul IS NULL
 )
 BEGIN
     UPDATE _synq_local SET ts = ts + 1;
 
     INSERT INTO _synq_undolog(ts, peer, obj_ts, obj_peer, ul)
-    SELECT local.ts, local.peer, NEW.obj_ts, NEW.obj_peer, 1 + ifnull((
-            SELECT max(ul) FROM _synq_undolog
-            WHERE obj_ts = NEW.obj_ts AND obj_peer = NEW.obj_peer
-        ), 0) FROM _synq_local AS local;
+    SELECT local.ts, local.peer, NEW.obj_ts, NEW.obj_peer, 1
+    FROM _synq_local AS local
+    WHERE true  -- avoid parsing ambiguity
+    ON CONFLICT(obj_ts, obj_peer)
+    DO UPDATE SET ul = ul + 1, ts = excluded.ts, peer = excluded.peer;
 END;
 
 -- following triggers are recursive triggers
@@ -595,7 +580,11 @@ FROM extern._synq_fklog AS log JOIN main._synq_context AS ctx
 INSERT INTO main._synq_undolog
 SELECT log.*
 FROM extern._synq_undolog AS log JOIN main._synq_context AS ctx
-    ON log.ts > ctx.ts AND log.peer = ctx.peer;
+    ON log.ts > ctx.ts AND log.peer = ctx.peer
+WHERE true  -- avoid parsing ambiguity
+ON CONFLICT(obj_ts, obj_peer)
+DO UPDATE SET ul = excluded.ul, ts = excluded.ts, peer = excluded.peer
+WHERE ul < excluded.ul;
 """
 
 _MARK_DANGLING_REFS = """
@@ -746,9 +735,6 @@ WHERE mark = 0 AND on_delete = 2; -- only SET NULL
 
 -- D.4. un-mark remaining rows
 UPDATE _synq_fklog SET mark = NULL WHERE mark IS NOT NULL;
-
--- Prepare for building updated rows and new rows
--- todo...
 """
 
 _MERGE_END = """
