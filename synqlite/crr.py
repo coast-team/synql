@@ -47,17 +47,15 @@ SELECT sql FROM sqlite_master WHERE type = 'table' AND
 """
 
 _CREATE_TABLES = """
--- use `UPDATE _synq_local SET ts = ts + 1` to refresh the hybrid logical clock
-
 CREATE TABLE IF NOT EXISTS _synq_local(
     rowid integer PRIMARY KEY DEFAULT 1 CHECK(rowid = 1),
     peer integer NOT NULL DEFAULT (random() >> 16), -- 48bits of entropy
     ts integer NOT NULL DEFAULT 0 CHECK(ts >= 0),
     is_merging integer NOT NULL DEFAULT 0 CHECK(is_merging & 1 = is_merging)
 );
-
 INSERT INTO _synq_local DEFAULT VALUES;
 
+-- use `UPDATE _synq_local SET ts = ts + 1` to refresh the hybrid logical clock
 DROP TRIGGER IF EXISTS  _synq_local_clock;
 CREATE TRIGGER          _synq_local_clock
 AFTER UPDATE OF ts ON _synq_local WHEN (OLD.ts + 1 = NEW.ts)
@@ -288,7 +286,6 @@ def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols, conf: Config) -> str
     DROP TRIGGER IF EXISTS "_synq_id_update_{tbl_name}_pk_";
     CREATE TRIGGER "_synq_id_update_{tbl_name}_pk_"
     AFTER UPDATE OF rowid ON "{tbl_name}"
-    WHEN (SELECT NOT is_merging FROM _synq_local)
     BEGIN
         UPDATE "_synq_id_{tbl_name}" SET rowid = NEW.rowid
         WHERE rowid = OLD.rowid;
@@ -722,6 +719,7 @@ WHERE ctx.ts > main._synq_context.ts AND main._synq_context.peer = ctx.peer;
 UPDATE main._synq_context SET ts = local.ts
 FROM main._synq_local AS local
 WHERE main._synq_context.peer = local.peer AND
+    -- at least one automatic update was performed?
     local.ts > (SELECT max(ts) FROM extern._synq_context);
 """
 
