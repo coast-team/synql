@@ -53,8 +53,7 @@ CREATE TABLE IF NOT EXISTS _synq_local(
     rowid integer PRIMARY KEY DEFAULT 1 CHECK(rowid = 1),
     peer integer NOT NULL DEFAULT (random() >> 16), -- 48bits of entropy
     ts integer NOT NULL DEFAULT 0 CHECK(ts >= 0),
-    is_merging integer NOT NULL DEFAULT 0 CHECK(is_merging & 1 = is_merging),
-    logcleanup integer NOT NULL DEFAULT 0 CHECK(logcleanup & 1 = logcleanup)
+    is_merging integer NOT NULL DEFAULT 0 CHECK(is_merging & 1 = is_merging)
 );
 
 INSERT INTO _synq_local DEFAULT VALUES;
@@ -107,17 +106,6 @@ CREATE TABLE IF NOT EXISTS _synq_log(
         ON DELETE CASCADE ON UPDATE CASCADE
 );
 
-DROP TRIGGER IF EXISTS  _synq_log_cleanup;
-CREATE TRIGGER          _synq_log_cleanup
-AFTER INSERT ON _synq_log
--- Do not cleanup updates of indexes (they could be undone)
-WHEN (NEW.tbl_index IS NULL AND (SELECT logcleanup FROM _synq_local))
-BEGIN
-    -- Delete shadowed entries
-    DELETE FROM _synq_log WHERE (ts <> NEW.ts OR peer <> NEW.peer) AND
-        row_ts = NEW.row_ts AND row_peer = NEW.row_peer AND col = NEW.col;
-END;
-
 CREATE TABLE IF NOT EXISTS _synq_fklog(
     ts integer NOT NULL,
     peer integer NOT NULL,
@@ -141,15 +129,6 @@ CREATE TABLE IF NOT EXISTS _synq_fklog(
     FOREIGN KEY(foreign_row_ts, foreign_row_peer) REFERENCES _synq_id(row_ts, row_peer)
         ON DELETE CASCADE ON UPDATE CASCADE
 );
-
-DROP TRIGGER IF EXISTS  _synq_fklog_cleanup;
-CREATE TRIGGER          _synq_fklog_cleanup
-AFTER INSERT ON _synq_fklog WHEN (SELECT logcleanup FROM _synq_local)
-BEGIN
-    -- Delete shadowed entries
-    DELETE FROM _synq_fklog WHERE (ts <> NEW.ts OR peer <> NEW.peer) AND
-        row_ts = NEW.row_ts AND row_peer = NEW.row_peer AND fk_id = NEW.fk_id;
-END;
 
 CREATE TABLE IF NOT EXISTS _synq_undolog(
     ts integer NOT NULL,
