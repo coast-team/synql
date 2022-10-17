@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS _synq_local(
     peer integer NOT NULL DEFAULT (random() >> 16), -- 48bits of entropy
     ts integer NOT NULL DEFAULT 0 CHECK(ts >= 0),
     is_merging integer NOT NULL DEFAULT 0 CHECK(is_merging & 1 = is_merging)
-);
+) STRICT;
 INSERT INTO _synq_local DEFAULT VALUES;
 
 -- use `UPDATE _synq_local SET ts = ts + 1` to refresh the hybrid logical clock
@@ -79,14 +79,14 @@ END;
 CREATE TABLE IF NOT EXISTS _synq_context(
     peer integer PRIMARY KEY,
     ts integer NOT NULL DEFAULT 0 CHECK (ts >= 0)
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS _synq_id(
     row_ts integer NOT NULL,
     row_peer integer NOT NULL REFERENCES _synq_context(peer),
     tbl text NOT NULL,
     PRIMARY KEY(row_ts DESC, row_peer DESC)
-) WITHOUT ROWID;
+) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS _synq_log(
     ts integer NOT NULL,
@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS _synq_log(
     PRIMARY KEY(ts DESC, peer DESC),
     FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
         ON DELETE CASCADE ON UPDATE CASCADE
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS _synq_fklog(
     ts integer NOT NULL,
@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS _synq_fklog(
         ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY(foreign_row_ts, foreign_row_peer) REFERENCES _synq_id(row_ts, row_peer)
         ON DELETE CASCADE ON UPDATE CASCADE
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS _synq_undolog(
     ts integer NOT NULL,
@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS _synq_undolog(
     is_deleted integer NOT NULL AS (ul%2) CHECK(is_deleted & 1 = is_deleted),
     PRIMARY KEY(ts DESC, peer DESC),
     UNIQUE(obj_ts, obj_peer)
-) WITHOUT ROWID;
+) STRICT, WITHOUT ROWID;
 
 DROP VIEW IF EXISTS _synq_log_active;
 CREATE VIEW         _synq_log_active AS
@@ -287,7 +287,7 @@ def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols, conf: Config) -> str
         UNIQUE(row_ts, row_peer),
         FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
             ON DELETE RESTRICT ON UPDATE CASCADE
-    );
+    ) STRICT;
 
     DROP TRIGGER IF EXISTS "_synq_id_update_{tbl_name}_pk_";
     CREATE TRIGGER "_synq_id_update_{tbl_name}_pk_"
