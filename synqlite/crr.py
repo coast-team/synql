@@ -89,8 +89,25 @@ CREATE TABLE IF NOT EXISTS _synq_id(
     UNIQUE(row_peer, row_ts)
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS _synq_id_undo(
+    row_ts integer NOT NULL,
+    row_peer integer NOT NULL,
+    ul integer NOT NULL DEFAULT 0 CHECK(ul >= 0), -- undo length
+    ts integer NOT NULL CHECK(ts >= row_ts),
+    peer integer NOT NULL,
+    PRIMARY KEY(row_ts DESC, row_peer DESC),
+    FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
+        ON DELETE CASCADE ON UPDATE CASCADE
+) STRICT, WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS _synq_id_undo_index_ts ON _synq_id_undo(peer, ts);
+
+DROP VIEW IF EXISTS _synq_id_extra;
+CREATE VIEW         _synq_id_extra AS
+SELECT id.row_ts, id.row_peer, id.tbl, ifnull(undo.ul, 0) AS row_ul
+FROM _synq_id AS id LEFT JOIN _synq_id_undo AS undo USING(row_ts, row_peer);
+
 CREATE TABLE IF NOT EXISTS _synq_log(
-    ts integer NOT NULL,
+    ts integer NOT NULL CHECK(ts >= row_ts),
     peer integer NOT NULL,
     row_ts integer NOT NULL,
     row_peer integer NOT NULL,
@@ -100,13 +117,14 @@ CREATE TABLE IF NOT EXISTS _synq_log(
     -- column of a composite key have the same index id
     -- WARNING: interleaved indexes are not supported
     tbl_index integer DEFAULT NULL,
-    PRIMARY KEY(ts DESC, peer DESC),
+    PRIMARY KEY(row_ts, row_peer, col, ts, peer),
     FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
         ON DELETE CASCADE ON UPDATE CASCADE
 ) STRICT;
+CREATE INDEX IF NOT EXISTS _synq_log_index_ts ON _synq_log(peer, ts);
 
 CREATE TABLE IF NOT EXISTS _synq_fklog(
-    ts integer NOT NULL,
+    ts integer NOT NULL CHECK(ts >= row_ts),
     peer integer NOT NULL,
     row_ts integer NOT NULL,
     row_peer integer NOT NULL,
@@ -122,18 +140,19 @@ CREATE TABLE IF NOT EXISTS _synq_fklog(
     -- allow graph marking
     -- 0: on delete mark, 1: on update mark
     mark integer DEFAULT NULL,
-    PRIMARY KEY(ts DESC, peer DESC),
+    PRIMARY KEY(row_ts, row_peer, fk_id, ts, peer),
     FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
         ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY(foreign_row_ts, foreign_row_peer) REFERENCES _synq_id(row_ts, row_peer)
-        ON DELETE CASCADE ON UPDATE CASCADE
+        ON DELETE NO ACTION ON UPDATE CASCADE
 ) STRICT;
+CREATE INDEX IF NOT EXISTS _synq_fklog_index_ts ON _synq_fklog(peer, ts);
 
 CREATE TABLE IF NOT EXISTS _synq_undolog(
     obj_ts integer NOT NULL,
     obj_peer integer NOT NULL,
     ul integer NOT NULL DEFAULT 0 CHECK(ul >= 0), -- undo length
-    ts integer NOT NULL,
+    ts integer NOT NULL CHECK(ts >= obj_ts),
     peer integer NOT NULL,
     PRIMARY KEY(obj_ts DESC, obj_peer DESC)
 ) STRICT, WITHOUT ROWID;
@@ -141,14 +160,12 @@ CREATE INDEX IF NOT EXISTS _synq_undolog_ts ON _synq_undolog(peer, ts);
 
 DROP VIEW IF EXISTS _synq_log_extra;
 CREATE VIEW         _synq_log_extra AS
-SELECT log.*, id.tbl, ifnull(undo.ul, 0) AS ul, ifnull(undo_row.ul, 0) AS row_ul
+SELECT log.*, id.tbl, ifnull(undo.ul, 0) AS ul, id.row_ul
 FROM _synq_log AS log
-    LEFT JOIN _synq_id AS id
+    LEFT JOIN _synq_id_extra AS id
         USING(row_ts, row_peer)
     LEFT JOIN _synq_undolog AS undo
-        ON log.ts = undo.obj_ts AND log.peer = undo.obj_peer
-    LEFT JOIN _synq_undolog AS undo_row
-        ON log.row_ts = undo_row.obj_ts AND log.row_peer = undo_row.obj_peer;
+        ON log.ts = undo.obj_ts AND log.peer = undo.obj_peer;
 
 DROP VIEW IF EXISTS _synq_log_active;
 CREATE VIEW         _synq_log_active AS
@@ -167,14 +184,12 @@ WHERE NOT EXISTS(
 
 DROP VIEW IF EXISTS _synq_fklog_extra;
 CREATE VIEW         _synq_fklog_extra AS
-SELECT fklog.*, id.tbl, ifnull(undo.ul, 0) AS ul, ifnull(undo_row.ul, 0) AS row_ul
+SELECT fklog.*, id.tbl, ifnull(undo.ul, 0) AS ul, id.row_ul
 FROM _synq_fklog AS fklog
-    LEFT JOIN _synq_id AS id
+    LEFT JOIN _synq_id_extra AS id
         USING(row_ts, row_peer)
     LEFT JOIN _synq_undolog AS undo
-        ON fklog.ts = undo.obj_ts AND fklog.peer = undo.obj_peer
-    LEFT JOIN _synq_undolog AS undo_row
-        ON fklog.row_ts = undo_row.obj_ts AND fklog.row_peer = undo_row.obj_peer;
+        ON fklog.ts = undo.obj_ts AND fklog.peer = undo.obj_peer;
 
 DROP VIEW IF EXISTS _synq_fklog_active;
 CREATE VIEW         _synq_fklog_active AS
@@ -207,26 +222,6 @@ BEGIN
         NEW.on_delete, NEW.on_update, NEW.foreign_row_ts, NEW.foreign_row_peer,
         NEW.foreign_index, NEW.mark
     FROM _synq_local AS local;
-END;
-
-DROP VIEW IF EXISTS _synq_undolog_active;
-CREATE VIEW         _synq_undolog_active AS
-SELECT * FROM _synq_undolog;
-
-DROP TRIGGER IF EXISTS  _synq_undolog_active_insert;
-CREATE TRIGGER          _synq_undolog_active_insert
-INSTEAD OF INSERT ON _synq_undolog_active WHEN (
-    NEW.ts IS NULL AND NEW.peer IS NULL AND NEW.ul IS NULL
-)
-BEGIN
-    UPDATE _synq_local SET ts = ts + 1;
-
-    INSERT INTO _synq_undolog(ts, peer, obj_ts, obj_peer, ul)
-    SELECT local.ts, local.peer, NEW.obj_ts, NEW.obj_peer, 1
-    FROM _synq_local AS local
-    WHERE true  -- avoid parsing ambiguity
-    ON CONFLICT(obj_ts, obj_peer)
-    DO UPDATE SET ul = ul + 1, ts = excluded.ts, peer = excluded.peer;
 END;
 
 -- following triggers are recursive triggers
@@ -317,11 +312,11 @@ def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols, conf: Config) -> str
     BEGIN
         UPDATE _synq_local SET ts = ts + 1;
 
-        INSERT INTO _synq_undolog(ts, peer, obj_ts, obj_peer, ul)
+        INSERT INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
         SELECT local.ts, local.peer, OLD.row_ts, OLD.row_peer, 1
         FROM _synq_local AS local
         WHERE true  -- avoid parsing ambiguity
-        ON CONFLICT(obj_ts, obj_peer)
+        ON CONFLICT(row_ts, row_peer)
         DO UPDATE SET ul = ul + 1, ts = excluded.ts, peer = excluded.peer;
     END;
     """
@@ -543,7 +538,7 @@ _PULL_EXTERN = """
 UPDATE _synq_local SET ts = max(
     _synq_local.ts,
     (SELECT max(ts) FROM extern._synq_context)
-);
+) + 1;
 
 -- Add missing peers in the context with a ts of 0
 INSERT OR IGNORE INTO _synq_context
@@ -568,6 +563,15 @@ SELECT fklog.*
 FROM extern._synq_fklog AS fklog JOIN _synq_context AS ctx
     ON fklog.ts > ctx.ts AND fklog.peer = ctx.peer;
 
+INSERT INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
+SELECT log.ts, log.peer, log.row_ts, log.row_peer, log.ul
+FROM extern._synq_id_undo AS log JOIN _synq_context AS ctx
+    ON log.ts > ctx.ts AND log.peer = ctx.peer
+WHERE true  -- avoid parsing ambiguity
+ON CONFLICT(row_ts, row_peer)
+DO UPDATE SET ul = excluded.ul, ts = excluded.ts, peer = excluded.peer
+WHERE ul < excluded.ul;
+
 INSERT INTO _synq_undolog(ts, peer, obj_ts, obj_peer, ul)
 SELECT log.ts, log.peer, log.obj_ts, log.obj_peer, log.ul
 FROM extern._synq_undolog AS log JOIN _synq_context AS ctx
@@ -584,13 +588,13 @@ _MARK_DANGLING_REFS = """
 -- to traverse the graph of references.
 UPDATE _synq_fklog SET mark = 0
 FROM _synq_context AS ctx, extern._synq_context AS ectx,
-    _synq_undolog AS undo
+    _synq_id_undo AS undo
 WHERE undo.ul%2 = 1 AND (
     (undo.ts > ctx.ts AND undo.peer = ctx.peer) OR
     (undo.ts > ectx.ts AND undo.peer = ectx.peer)
 ) AND (
-    undo.obj_ts = _synq_fklog.foreign_row_ts AND
-    undo.obj_peer = _synq_fklog.foreign_row_peer
+    undo.row_ts = _synq_fklog.foreign_row_ts AND
+    undo.row_peer = _synq_fklog.foreign_row_peer
 ) AND EXISTS (
     SELECT 1 FROM _synq_fklog_effective AS fklog
     WHERE _synq_fklog.ts = fklog.ts AND _synq_fklog.peer = fklog.peer
@@ -612,11 +616,11 @@ UPDATE _synq_fklog SET mark = 1
 WHERE mark = 0 AND on_delete = 1;
 
 -- A.3. redo rows referenced by marked rows if undone
-INSERT INTO _synq_undolog_active(obj_ts, obj_peer)
-SELECT undo.obj_ts, undo.obj_peer
-FROM _synq_undolog AS undo JOIN _synq_fklog AS fklog ON
-    undo.obj_ts = fklog.foreign_row_ts AND
-    undo.obj_peer = fklog.foreign_row_peer
+INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
+SELECT local.ts, local.peer, undo.row_ts, undo.row_peer, undo.ul + 1
+FROM _synq_local AS local, _synq_id_undo AS undo JOIN _synq_fklog AS fklog ON
+    undo.row_ts = fklog.foreign_row_ts AND
+    undo.row_peer = fklog.foreign_row_peer
 WHERE fklog.mark = 1 AND undo.ul%2 = 1;
 
 -- A.4. un-mark remaining rows
@@ -626,9 +630,9 @@ UPDATE _synq_fklog SET mark = NULL WHERE mark IS NOT NULL;
 
 -- B.1. ON UPDATE RESTRICT
 -- undo all concurrent updates to a restrict ref
-INSERT INTO _synq_undolog_active(obj_peer, obj_ts)
-SELECT log.peer, log.ts
-FROM _synq_context AS ctx, extern._synq_context AS ectx,
+INSERT OR REPLACE INTO _synq_undolog(ts, peer, obj_peer, obj_ts, ul)
+SELECT local.ts, local.peer, log.peer, log.ts, log.ul + 1
+FROM _synq_local AS local, _synq_context AS ctx, extern._synq_context AS ectx,
     _synq_log_active AS log, _synq_fklog_effective AS fklog
 WHERE (
     (log.ts > ctx.ts AND log.peer = ctx.peer AND fklog.ts > ectx.ts AND fklog.peer = ectx.peer) OR
@@ -679,9 +683,9 @@ WHERE (
 -- C. resolve uniqueness conflicts
 
 -- undo latest rows with conflicting unique keys
-INSERT INTO _synq_undolog_active(obj_ts, obj_peer)
-SELECT DISTINCT log.row_ts, log.row_peer
-FROM _synq_log_effective AS log JOIN _synq_log_effective AS self
+INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
+SELECT DISTINCT local.ts, local.peer, log.row_ts, log.row_peer, log.row_ul + 1
+FROM _synq_local AS local, _synq_log_effective AS log JOIN _synq_log_effective AS self
         USING(tbl, col, tbl_index, val),
     _synq_context AS ctx, extern._synq_context AS ectx
 WHERE tbl_index IS NOT NULL AND (
@@ -704,9 +708,9 @@ HAVING count(*) >= (
 {_MARK_DANGLING_REFS}
 
 -- D.2. ON DELETE CASCADE
-INSERT INTO _synq_undolog_active(obj_ts, obj_peer)
-SELECT row_ts, row_peer
-FROM _synq_fklog
+INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
+SELECT local.ts, local.peer, row_ts, row_peer, row_ul + 1
+FROM _synq_local AS local, _synq_fklog_extra
 WHERE mark = 0 AND on_delete <> 2; -- except SET NULL
 
 -- D.3. ON DELETE SET NULL
@@ -731,10 +735,20 @@ FROM extern._synq_context AS ctx
 WHERE ctx.ts > _synq_context.ts AND _synq_context.peer = ctx.peer;
 
 UPDATE _synq_context SET ts = local.ts
-FROM _synq_local AS local
-WHERE _synq_context.peer = local.peer AND
-    -- at least one automatic update was performed?
-    local.ts > (SELECT max(ts) FROM extern._synq_context);
+FROM _synq_local AS local JOIN _synq_id_undo USING(peer, ts)
+WHERE _synq_context.peer = local.peer;
+
+UPDATE _synq_context SET ts = local.ts
+FROM _synq_local AS local JOIN _synq_undolog USING(peer, ts)
+WHERE _synq_context.peer = local.peer;
+
+UPDATE _synq_context SET ts = local.ts
+FROM _synq_local AS local JOIN _synq_log USING(peer, ts)
+WHERE _synq_context.peer = local.peer;
+
+UPDATE _synq_context SET ts = local.ts
+FROM _synq_local AS local JOIN _synq_fklog USING(peer, ts)
+WHERE _synq_context.peer = local.peer;
 """
 
 
@@ -822,8 +836,8 @@ def _create_pull(tables: sql.Symbols) -> str:
                     JOIN _synq_context AS ctx
                         ON fklog.peer = ctx.peer AND fklog.ts > ctx.ts
                 UNION
-                SELECT redo.obj_ts AS row_ts, redo.obj_peer AS row_peer
-                FROM _synq_undolog AS redo
+                SELECT redo.row_ts, redo.row_peer
+                FROM _synq_id_undo AS redo
                     JOIN _synq_context AS ctx
                         ON redo.ts > ctx.ts AND redo.peer = ctx.peer
                 WHERE NOT redo.ul%2 = 1
@@ -850,15 +864,15 @@ def _create_pull(tables: sql.Symbols) -> str:
         -- Apply deletion (existing rows)
         DELETE FROM "{tbl_name}" WHERE rowid IN (
             SELECT id.rowid FROM "_synq_id_{tbl_name}" AS id
-                JOIN _synq_undolog AS undo
-                    ON id.row_ts = undo.obj_ts AND id.row_peer = undo.obj_peer
+                JOIN _synq_id_undo AS undo
+                    ON id.row_ts = undo.row_ts AND id.row_peer = undo.row_peer
             WHERE undo.ul%2 = 1
         );
 
         DELETE FROM "_synq_id_{tbl_name}" WHERE rowid IN (
             SELECT id.rowid FROM "_synq_id_{tbl_name}" AS id
-                JOIN _synq_undolog AS undo
-                    ON id.row_ts = undo.obj_ts AND id.row_peer = undo.obj_peer
+                JOIN _synq_id_undo AS undo
+                    ON id.row_ts = undo.row_ts AND id.row_peer = undo.row_peer
             WHERE undo.ul%2 = 1
         );
  
@@ -868,19 +882,19 @@ def _create_pull(tables: sql.Symbols) -> str:
         FROM _synq_id AS id JOIN _synq_context AS ctx
             ON id.row_ts > ctx.ts AND id.row_peer = ctx.peer
         WHERE id.tbl = '{tbl_name}' AND NOT EXISTS(
-            SELECT 1 FROM _synq_undolog AS undo
+            SELECT 1 FROM _synq_id_undo AS undo
             WHERE undo.ul%2 = 1 AND
-                undo.obj_ts = id.row_ts AND undo.obj_peer = id.row_peer
+                undo.row_ts = id.row_ts AND undo.row_peer = id.row_peer
         );
 
         -- Auto-assign local rowids for redone rows
         INSERT OR IGNORE INTO "_synq_id_{tbl_name}"(row_ts, row_peer)
         SELECT id.row_ts, id.row_peer
-        FROM _synq_undolog AS redo
+        FROM _synq_id_undo AS redo
             JOIN _synq_context AS ctx
                 ON redo.ts > ctx.ts AND redo.peer = ctx.peer
             JOIN _synq_id AS id
-                ON redo.obj_ts = id.row_ts AND redo.obj_peer = id.row_peer
+                ON redo.row_ts = id.row_ts AND redo.row_peer = id.row_peer
                     AND id.tbl = '{tbl_name}'
         WHERE redo.ul%2 = 0;
         """

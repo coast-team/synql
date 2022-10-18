@@ -450,12 +450,12 @@ def test_concur_ins_repl_col(tmp_path: pathlib.Path) -> None:
                     ("b1", (1, 2)),
                 },
             },
-            ctx={1: 3, 2: 3},
+            ctx={1: 4, 2: 4},
             log={
                 Col(ts=(2, 1), row=(1, 1), col=0, val="a1"),
                 Col(ts=(2, 2), row=(1, 2), col=0, val="b1"),
-                Col(ts=(3, 1), row=(1, 1), col=0, val="a2"),
-                Col(ts=(3, 2), row=(1, 1), col=0, val="b2"),
+                Col(ts=(4, 1), row=(1, 1), col=0, val="a2"),
+                Col(ts=(4, 2), row=(1, 1), col=0, val="b2"),
             },
         )
 
@@ -547,7 +547,7 @@ def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
         crr.pull_from(b, tmp_path / "a.db")
         assert crr_from(b) == Crr(
             tbls={"X": {("u1", "v1", (1, 1))}},
-            ctx={1: 6, 2: 8},
+            ctx={1: 6, 2: 7},
             log={
                 Col(ts=(2, 1), row=(1, 1), col=0, val="u1"),
                 Col(ts=(3, 1), row=(1, 1), col=1, val="v1"),
@@ -556,14 +556,14 @@ def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
                 Col(ts=(2, 2), row=(1, 2), col=0, val="u1"),
                 Col(ts=(3, 2), row=(1, 2), col=1, val="v2"),
                 Undo(ts=(7, 2), obj=(1, 2), ul=1),
-                Undo(ts=(8, 2), obj=(4, 1), ul=1),
+                Undo(ts=(7, 2), obj=(4, 1), ul=1),
             },
         )
 
         crr.pull_from(a, tmp_path / "b.bak.db")
         assert crr_from(a) == Crr(
             tbls={"X": {("u1", "v1", (1, 1))}},
-            ctx={1: 8, 2: 3},
+            ctx={1: 7, 2: 3},
             log={
                 Col(ts=(2, 1), row=(1, 1), col=0, val="u1"),
                 Col(ts=(3, 1), row=(1, 1), col=1, val="v1"),
@@ -572,7 +572,7 @@ def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
                 Col(ts=(2, 2), row=(1, 2), col=0, val="u1"),
                 Col(ts=(3, 2), row=(1, 2), col=1, val="v2"),
                 Undo(ts=(7, 1), obj=(1, 2), ul=1),
-                Undo(ts=(8, 1), obj=(4, 1), ul=1),
+                Undo(ts=(7, 1), obj=(4, 1), ul=1),
             },
         )
 
@@ -802,22 +802,22 @@ def test_concur_del_fk_set_null(tmp_path: pathlib.Path) -> None:
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
             tbls={"X": set(), "Y": {(1, None, (2, 2))}},
-            ctx={1: 4, 2: 3},
+            ctx={1: 5, 2: 3},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
                 Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
-                Ref(ts=(4, 1), row=(2, 2), fk=0, target=(None, None)),
+                Ref(ts=(5, 1), row=(2, 2), fk=0, target=(None, None)),
             },
         )
 
         crr.pull_from(b, tmp_path / "a.bak.db")
         assert crr_from(b) == Crr(
             tbls={"X": set(), "Y": {(1, None, (2, 2))}},
-            ctx={1: 2, 2: 4},
+            ctx={1: 2, 2: 5},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
                 Ref(ts=(3, 2), row=(2, 2), fk=0, target=(1, 1)),
-                Ref(ts=(4, 2), row=(2, 2), fk=0, target=(None, None)),
+                Ref(ts=(5, 2), row=(2, 2), fk=0, target=(None, None)),
             },
         )
 
@@ -885,28 +885,28 @@ def test_concur_up2_fk_restrict(tmp_path: pathlib.Path) -> None:
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (3, 2))}},
-            ctx={1: 6, 2: 4},
+            ctx={1: 5, 2: 4},
             log={
                 Col(ts=(2, 1), row=(1, 1), col=0, val=1),
                 Col(ts=(3, 1), row=(1, 1), col=0, val=2),
                 Col(ts=(4, 1), row=(1, 1), col=0, val=3),
                 Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
                 Undo(ts=(5, 1), obj=(3, 1), ul=1),
-                Undo(ts=(6, 1), obj=(4, 1), ul=1),
+                Undo(ts=(5, 1), obj=(4, 1), ul=1),
             },
         )
 
         crr.pull_from(b, tmp_path / "a.bak.db")
         assert crr_from(b) == Crr(
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (3, 2))}},
-            ctx={1: 4, 2: 6},
+            ctx={1: 4, 2: 5},
             log={
                 Col(ts=(2, 1), row=(1, 1), col=0, val=1),
                 Col(ts=(3, 1), row=(1, 1), col=00, val=2),
                 Col(ts=(4, 1), row=(1, 1), col=0, val=3),
                 Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
                 Undo(ts=(5, 2), obj=(3, 1), ul=1),
-                Undo(ts=(6, 2), obj=(4, 1), ul=1),
+                Undo(ts=(5, 2), obj=(4, 1), ul=1),
             },
         )
 
@@ -931,24 +931,24 @@ def test_concur_up_fk_cascade(tmp_path: pathlib.Path) -> None:
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
             tbls={"X": {(2, (1, 1))}, "Y": {(1, 2, (3, 2))}},
-            ctx={1: 5, 2: 4},
+            ctx={1: 6, 2: 4},
             log={
                 Col(ts=(2, 1), row=(1, 1), col=0, val=1),
                 Col(ts=(3, 1), row=(1, 1), col=0, val=2),
                 Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
-                Ref(ts=(5, 1), row=(3, 2), fk=0, target=(1, 1)),
+                Ref(ts=(6, 1), row=(3, 2), fk=0, target=(1, 1)),
             },
         )
 
         crr.pull_from(b, tmp_path / "a.bak.db")
         assert crr_from(b) == Crr(
             tbls={"X": {(2, (1, 1))}, "Y": {(1, 2, (3, 2))}},
-            ctx={1: 3, 2: 5},
+            ctx={1: 3, 2: 6},
             log={
                 Col(ts=(2, 1), row=(1, 1), col=0, val=1),
                 Col(ts=(3, 1), row=(1, 1), col=0, val=2),
                 Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
-                Ref(ts=(5, 2), row=(3, 2), fk=0, target=(1, 1)),
+                Ref(ts=(6, 2), row=(3, 2), fk=0, target=(1, 1)),
             },
         )
 
@@ -973,24 +973,24 @@ def test_concur_up_fk_set_null(tmp_path: pathlib.Path) -> None:
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
             tbls={"X": {(2, (1, 1))}, "Y": {(1, None, (3, 2))}},
-            ctx={1: 5, 2: 4},
+            ctx={1: 6, 2: 4},
             log={
                 Col(ts=(2, 1), row=(1, 1), col=0, val=1),
                 Col(ts=(3, 1), row=(1, 1), col=0, val=2),
                 Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
-                Ref(ts=(5, 1), row=(3, 2), fk=0, target=(None, None)),
+                Ref(ts=(6, 1), row=(3, 2), fk=0, target=(None, None)),
             },
         )
 
         crr.pull_from(b, tmp_path / "a.bak.db")
         assert crr_from(b) == Crr(
             tbls={"X": {(2, (1, 1))}, "Y": {(1, None, (3, 2))}},
-            ctx={1: 3, 2: 5},
+            ctx={1: 3, 2: 6},
             log={
                 Col(ts=(2, 1), row=(1, 1), col=0, val=1),
                 Col(ts=(3, 1), row=(1, 1), col=0, val=2),
                 Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
-                Ref(ts=(5, 2), row=(3, 2), fk=0, target=(None, None)),
+                Ref(ts=(6, 2), row=(3, 2), fk=0, target=(None, None)),
             },
         )
 
@@ -1017,29 +1017,29 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
             tbls={"X": {(2, (1, 1))}, "Y": {(2, (3, 2))}},
-            ctx={1: 9, 2: 6},
+            ctx={1: 8, 2: 6},
             log={
                 Col(ts=(2, 1), row=(1, 1), col=0, val=1),
                 Col(ts=(3, 1), row=(1, 1), col=0, val=2),
                 Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
                 Col(ts=(6, 2), row=(5, 2), col=0, val=2),
-                Ref(ts=(8, 1), row=(3, 2), fk=0, target=(1, 1)),
                 Undo(ts=(7, 1), obj=(1, 1), ul=2),
-                Undo(ts=(9, 1), obj=(5, 2), ul=1),
+                Ref(ts=(8, 1), row=(3, 2), fk=0, target=(1, 1)),
+                Undo(ts=(8, 1), obj=(5, 2), ul=1),
             },
         )
 
         crr.pull_from(b, tmp_path / "a.bak.db")
         assert crr_from(b) == Crr(
             tbls={"X": {(2, (1, 1))}, "Y": {(2, (3, 2))}},
-            ctx={1: 4, 2: 9},
+            ctx={1: 4, 2: 8},
             log={
                 Col(ts=(2, 1), row=(1, 1), col=0, val=1),
                 Col(ts=(3, 1), row=(1, 1), col=0, val=2),
                 Ref(ts=(4, 2), row=(3, 2), fk=0, target=(1, 1)),
                 Col(ts=(6, 2), row=(5, 2), col=0, val=2),
-                Ref(ts=(8, 2), row=(3, 2), fk=0, target=(1, 1)),
                 Undo(ts=(7, 2), obj=(1, 1), ul=2),
-                Undo(ts=(9, 2), obj=(5, 2), ul=1),
+                Ref(ts=(8, 2), row=(3, 2), fk=0, target=(1, 1)),
+                Undo(ts=(8, 2), obj=(5, 2), ul=1),
             },
         )

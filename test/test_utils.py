@@ -94,7 +94,12 @@ def crr_from(db: sqlite3.Connection) -> Crr:
             {
                 Undo(ts=(ts, peer), obj=(obj_ts, obj_peer), ul=ul)
                 for ts, peer, obj_ts, obj_peer, ul in fetch(
-                    db, "SELECT ts, peer, obj_ts, obj_peer, ul FROM _synq_undolog"
+                    db,
+                    """
+                    SELECT ts, peer, obj_ts, obj_peer, ul FROM _synq_undolog
+                    UNION
+                    SELECT ts, peer, row_ts, row_peer, ul FROM _synq_id_undo
+                    """,
                 )
             }
         )
