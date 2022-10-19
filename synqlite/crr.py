@@ -70,7 +70,7 @@ END;
 
 DROP TRIGGER IF EXISTS  _synq_local_context_update;
 CREATE TRIGGER          _synq_local_context_update
-AFTER UPDATE OF ts ON _synq_local WHEN (SELECT NOT is_merging FROM _synq_local)
+AFTER UPDATE OF ts ON _synq_local WHEN (NOT NEW.is_merging)
 BEGIN
 	UPDATE _synq_context SET ts = NEW.ts WHERE _synq_context.peer = NEW.peer;
 END;
