@@ -290,14 +290,6 @@ def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols, conf: Config) -> str
             ON DELETE RESTRICT ON UPDATE CASCADE
     ) STRICT;
 
-    DROP TRIGGER IF EXISTS "_synq_id_update_{tbl_name}_pk_";
-    CREATE TRIGGER "_synq_id_update_{tbl_name}_pk_"
-    AFTER UPDATE OF rowid ON "{tbl_name}"
-    BEGIN
-        UPDATE "_synq_id_{tbl_name}" SET rowid = NEW.rowid
-        WHERE rowid = OLD.rowid;
-    END;
-
     DROP TRIGGER IF EXISTS "_synq_delete_{tbl_name}";
     CREATE TRIGGER "_synq_delete_{tbl_name}"
     AFTER DELETE ON "{tbl_name}" WHEN (SELECT NOT is_merging FROM _synq_local)
