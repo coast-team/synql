@@ -322,8 +322,6 @@ def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols, conf: Config) -> str
         ]
         tbl_index = uniqueness_ids[0] if len(uniqueness_ids) > 0 else "NULL"
         insertions += f"""
-        UPDATE _synq_local SET ts = ts + 1; -- triggers clock update
-
         INSERT INTO _synq_log(ts, peer, row_ts, row_peer, col, val, tbl_index)
         SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, {i}, NEW."{col.name}", {tbl_index}
         FROM _synq_local AS local, (
@@ -352,8 +350,6 @@ def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols, conf: Config) -> str
         )
         coma_fk_cols = ", ".join(f'"{col}"' for col in fk.columns)
         fk_insertion = f"""
-            UPDATE _synq_local SET ts = ts + 1; -- triggers clock update
-
             -- handle case where at least one col is NULL
             INSERT INTO _synq_fklog(
                 ts, peer, row_ts, row_peer, fk_id,
@@ -387,6 +383,8 @@ def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols, conf: Config) -> str
         AFTER UPDATE OF {coma_fk_cols} ON "{tbl_name}"
         WHEN (SELECT NOT is_merging FROM _synq_local)
         BEGIN
+            UPDATE _synq_local SET ts = ts + 1; -- triggers clock update
+
             {fk_insertion}
         END;
         """.rstrip()
