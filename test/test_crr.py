@@ -84,6 +84,7 @@ def test_aliased_rowid(tmp_path: pathlib.Path) -> None:
             ctx={1: 5},
             log={Undo(ts=(4, 1), obj=(3, 1), ul=1), Undo(ts=(2, 1), obj=(1, 1), ul=1)},
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_repl_col(tmp_path: pathlib.Path) -> None:
@@ -108,6 +109,7 @@ def test_repl_col(tmp_path: pathlib.Path) -> None:
                 Col(ts=(2, 1), row=(1, 1), col=0, val="v2"),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_repl_pk(tmp_path: pathlib.Path) -> None:
@@ -132,6 +134,7 @@ def test_repl_pk(tmp_path: pathlib.Path) -> None:
                 Col(ts=(2, 1), row=(1, 1), col=0, val="v2"),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
@@ -162,6 +165,7 @@ def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
                 Ref(ts=(4, 1), row=(2, 1), fk=0, target=(3, 1)),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_fk_repl_col(tmp_path: pathlib.Path) -> None:
@@ -201,6 +205,7 @@ def test_fk_repl_col(tmp_path: pathlib.Path) -> None:
                 Ref(ts=(4, 1), row=(2, 1), fk=1, target=(3, 1)),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_fk_repl_multi_col(tmp_path: pathlib.Path) -> None:
@@ -258,6 +263,7 @@ def test_fk_repl_multi_col(tmp_path: pathlib.Path) -> None:
                 Ref(ts=(4, 1), row=(2, 1), fk=2, target=(3, 1)),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_fk_up_cascade(tmp_path: pathlib.Path) -> None:
@@ -283,6 +289,7 @@ def test_fk_up_cascade(tmp_path: pathlib.Path) -> None:
                 Col(ts=(4, 1), row=(1, 1), col=0, val=2),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_fk_up_set_null(tmp_path: pathlib.Path) -> None:
@@ -308,6 +315,7 @@ def test_fk_up_set_null(tmp_path: pathlib.Path) -> None:
                 Col(ts=(4, 1), row=(1, 1), col=0, val=2),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_clone_to(tmp_path: pathlib.Path) -> None:
@@ -365,6 +373,7 @@ def test_pull_aliased_rowid(tmp_path: pathlib.Path) -> None:
             ctx={1: 2, 2: 0},
             log={Undo(ts=(2, 1), obj=(1, 1), ul=1)},
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_pull_repl_col(tmp_path: pathlib.Path) -> None:
@@ -394,6 +403,7 @@ def test_pull_repl_col(tmp_path: pathlib.Path) -> None:
                 Col(ts=(2, 1), row=(1, 1), col=0, val="v2"),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_pull_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
@@ -436,6 +446,7 @@ def test_pull_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
                 Ref(ts=(4, 1), row=(2, 1), fk=0, target=(3, 1)),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_concur_ins_aliased_rowid(tmp_path: pathlib.Path) -> None:
@@ -472,6 +483,7 @@ def test_concur_ins_aliased_rowid(tmp_path: pathlib.Path) -> None:
             ctx={1: 1, 2: 1},
             log=set(),
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_concur_ins_repl_col(tmp_path: pathlib.Path) -> None:
@@ -519,6 +531,7 @@ def test_concur_ins_repl_col(tmp_path: pathlib.Path) -> None:
                 Col(ts=(3, 2), row=(1, 1), col=0, val="b2"),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
@@ -554,6 +567,7 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(2, 1), obj=(1, 2), ul=1),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_past_conflicting_keys(tmp_path: pathlib.Path) -> None:
@@ -590,6 +604,7 @@ def test_past_conflicting_keys(tmp_path: pathlib.Path) -> None:
                 Col(ts=(1, 2), row=(1, 2), col=0, val="v1"),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
@@ -636,6 +651,7 @@ def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(3, 1), obj=(2, 1), ul=1),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_concur_del_fk_restrict_aliased_rowid(tmp_path: pathlib.Path) -> None:
@@ -674,6 +690,7 @@ def test_concur_del_fk_restrict_aliased_rowid(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(3, 2), obj=(1, 1), ul=2),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_concur_past_del_fk_restrict(tmp_path: pathlib.Path) -> None:
@@ -716,6 +733,7 @@ def test_concur_past_del_fk_restrict(tmp_path: pathlib.Path) -> None:
                 Ref(ts=(4, 2), row=(2, 2), fk=0, target=(3, 2)),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
@@ -756,6 +774,7 @@ def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(3, 2), obj=(1, 1), ul=2),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_concur_del_fk_restrict_rec(tmp_path: pathlib.Path) -> None:
@@ -801,6 +820,7 @@ def test_concur_del_fk_restrict_rec(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(4, 2), obj=(1, 1), ul=2),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_concur_del_fk_cascade(tmp_path: pathlib.Path) -> None:
@@ -841,6 +861,7 @@ def test_concur_del_fk_cascade(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(3, 2), obj=(2, 2), ul=1),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_concur_del_fk_set_null(tmp_path: pathlib.Path) -> None:
@@ -881,6 +902,7 @@ def test_concur_del_fk_set_null(tmp_path: pathlib.Path) -> None:
                 Ref(ts=(4, 2), row=(2, 2), fk=0, target=(None, None)),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_concur_up_fk_restrict(tmp_path: pathlib.Path) -> None:
@@ -923,6 +945,7 @@ def test_concur_up_fk_restrict(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(3, 2), obj=(2, 1), ul=1),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_concur_up2_fk_restrict(tmp_path: pathlib.Path) -> None:
@@ -970,6 +993,7 @@ def test_concur_up2_fk_restrict(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(4, 2), obj=(3, 1), ul=1),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_concur_up_fk_cascade(tmp_path: pathlib.Path) -> None:
@@ -1012,6 +1036,7 @@ def test_concur_up_fk_cascade(tmp_path: pathlib.Path) -> None:
                 Ref(ts=(4, 2), row=(2, 2), fk=1, target=(1, 1)),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_concur_up_fk_set_null(tmp_path: pathlib.Path) -> None:
@@ -1054,6 +1079,7 @@ def test_concur_up_fk_set_null(tmp_path: pathlib.Path) -> None:
                 Ref(ts=(4, 2), row=(2, 2), fk=1, target=(None, None)),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
@@ -1104,6 +1130,7 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(5, 2), obj=(3, 2), ul=1),
             },
         )
+        exec(a, "PRAGMA integrity_check")
 
 
 def test_spaced_names(tmp_path: pathlib.Path) -> None:
@@ -1125,3 +1152,4 @@ def test_spaced_names(tmp_path: pathlib.Path) -> None:
                 Ref(ts=(2, 1), row=(2, 1), fk=1, target=(1, 1)),
             },
         )
+        exec(a, "PRAGMA integrity_check")
