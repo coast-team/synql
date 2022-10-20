@@ -106,6 +106,21 @@ CREATE VIEW         _synq_id_extra AS
 SELECT id.row_ts, id.row_peer, id.tbl, ifnull(undo.ul, 0) AS row_ul
 FROM _synq_id AS id LEFT JOIN _synq_id_undo AS undo USING(row_ts, row_peer);
 
+CREATE TABLE IF NOT EXISTS _synq_fields(
+    field integer NOT NULL,
+    tbl_index integer NOT NULL,
+    PRIMARY KEY(field, tbl_index)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS _synq_fk(
+    fk_id integer NOT NULL PRIMARY KEY,
+    -- ON DELETE/UPDATE action info
+    -- 0: CASCADE, 1: RESTRICT, 2: SET NULL
+    on_delete integer NOT NULL CHECK(0 <= on_delete AND on_delete <= 2),
+    on_update integer NOT NULL CHECK(0 <= on_update AND on_update <= 2),
+    foreign_index integer NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS _synq_log(
     ts integer NOT NULL CHECK(ts >= row_ts),
     peer integer NOT NULL,
@@ -116,7 +131,6 @@ CREATE TABLE IF NOT EXISTS _synq_log(
     -- index id (for unique keys)
     -- column of a composite key have the same index id
     -- WARNING: interleaved indexes are not supported
-    tbl_index integer DEFAULT NULL,
     PRIMARY KEY(row_ts, row_peer, col, ts, peer),
     FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
         ON DELETE CASCADE ON UPDATE CASCADE
@@ -129,14 +143,9 @@ CREATE TABLE IF NOT EXISTS _synq_fklog(
     row_ts integer NOT NULL,
     row_peer integer NOT NULL,
     fk_id integer NOT NULL,
-    -- ON DELETE/UPDATE action info
-    -- 0: CASCADE, 1: NO ACTION, 2: RESTRICT, 3: SET DEFAULT, 4: SET NULL
-    on_delete integer NOT NULL CHECK(0 <= on_delete AND on_delete <= 2),
-    on_update integer NOT NULL CHECK(0 <= on_update AND on_update <= 2),
     foreign_row_ts integer DEFAULT NULL,
     foreign_row_peer integer DEFAULT NULL,
     -- which tbl_index of the foreign row is used?
-    foreign_index integer NOT NULL,
     -- allow graph marking
     -- 0: on delete mark, 1: on update mark
     mark integer DEFAULT NULL,
@@ -160,12 +169,16 @@ CREATE INDEX IF NOT EXISTS _synq_undolog_ts ON _synq_undolog(peer, ts);
 
 DROP VIEW IF EXISTS _synq_log_extra;
 CREATE VIEW         _synq_log_extra AS
-SELECT log.*, id.tbl, ifnull(undo.ul, 0) AS ul, id.row_ul
+SELECT log.*,
+    id.tbl, ifnull(undo.ul, 0) AS ul, id.row_ul,
+    fields.tbl_index
 FROM _synq_log AS log
     LEFT JOIN _synq_id_extra AS id
         USING(row_ts, row_peer)
     LEFT JOIN _synq_undolog AS undo
-        ON log.ts = undo.obj_ts AND log.peer = undo.obj_peer;
+        ON log.ts = undo.obj_ts AND log.peer = undo.obj_peer
+    LEFT JOIN _synq_fields AS fields
+        ON field = col;
 
 DROP VIEW IF EXISTS _synq_log_active;
 CREATE VIEW         _synq_log_active AS
@@ -184,12 +197,19 @@ WHERE NOT EXISTS(
 
 DROP VIEW IF EXISTS _synq_fklog_extra;
 CREATE VIEW         _synq_fklog_extra AS
-SELECT fklog.*, id.tbl, ifnull(undo.ul, 0) AS ul, id.row_ul
+SELECT fklog.*,
+    id.tbl, ifnull(undo.ul, 0) AS ul, id.row_ul,
+    fields.tbl_index,
+    fk.on_update, fk.on_delete, fk.foreign_index
 FROM _synq_fklog AS fklog
     LEFT JOIN _synq_id_extra AS id
         USING(row_ts, row_peer)
     LEFT JOIN _synq_undolog AS undo
-        ON fklog.ts = undo.obj_ts AND fklog.peer = undo.obj_peer;
+        ON fklog.ts = undo.obj_ts AND fklog.peer = undo.obj_peer
+    LEFT JOIN _synq_fields AS fields
+        ON field = fk_id
+    LEFT JOIN _synq_fk AS fk
+        USING(fk_id);
 
 DROP VIEW IF EXISTS _synq_fklog_effective;
 CREATE VIEW         _synq_fklog_effective AS
@@ -211,11 +231,10 @@ BEGIN
 
     INSERT INTO _synq_fklog(
         ts, peer, row_ts, row_peer, fk_id,
-        on_delete, on_update, foreign_row_ts, foreign_row_peer,
-        foreign_index, mark
+        foreign_row_ts, foreign_row_peer, mark
     ) SELECT local.ts, local.peer, NEW.row_ts, NEW.row_peer, NEW.fk_id,
-        NEW.on_delete, NEW.on_update, NEW.foreign_row_ts, NEW.foreign_row_peer,
-        NEW.foreign_index, NEW.mark
+        NEW.foreign_row_ts, NEW.foreign_row_peer,
+        NEW.mark
     FROM _synq_local AS local;
 END;
 
@@ -224,7 +243,8 @@ END;
 DROP TRIGGER IF EXISTS  _synq_fklog_on_delete_cascade_marking;
 CREATE TRIGGER          _synq_fklog_on_delete_cascade_marking
 AFTER UPDATE OF mark ON _synq_fklog WHEN (
-    OLD.mark is NULL AND NEW.mark = 0 AND OLD.on_delete = 0 -- CASCADE
+    OLD.mark is NULL AND NEW.mark = 0 AND
+    (SELECT on_delete = 0 FROM _synq_fk WHERE fk_id = OLD.fk_id)
 )
 BEGIN
     UPDATE _synq_fklog SET mark = 0
@@ -309,6 +329,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
             DO UPDATE SET ul = ul + 1, ts = excluded.ts, peer = excluded.peer;
         END;
         """
+        metadata = ""
         triggers = ""
         insertions = ""
         for col in replicated_cols:
@@ -317,10 +338,14 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 for i in range(len(tbl_unique_columns))
                 if col.name in tbl_unique_columns[i]
             ]
-            tbl_index = uniqueness_ids[0] if len(uniqueness_ids) > 0 else "NULL"
+            if len(uniqueness_ids) > 0:
+                metadata += f"""
+                INSERT OR REPLACE INTO _synq_fields(field, tbl_index)
+                VALUES({field_id}, {uniqueness_ids[0]});
+                """.rstrip()
             insertions += f"""
-            INSERT INTO _synq_log(ts, peer, row_ts, row_peer, col, val, tbl_index)
-            SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, {field_id}, NEW."{col.name}", {tbl_index}
+            INSERT INTO _synq_log(ts, peer, row_ts, row_peer, col, val)
+            SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, {field_id}, NEW."{col.name}"
             FROM _synq_local AS local, (
                 SELECT * FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid
             ) AS cur;
@@ -333,8 +358,8 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
             BEGIN
                 UPDATE _synq_local SET ts = ts + 1; -- triggers clock update
 
-                INSERT INTO _synq_log(ts, peer, row_ts, row_peer, col, val, tbl_index)
-                SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, {field_id}, NEW."{col.name}", {tbl_index}
+                INSERT INTO _synq_log(ts, peer, row_ts, row_peer, col, val)
+                SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, {field_id}, NEW."{col.name}"
                 FROM _synq_local AS local, (
                     SELECT * FROM "_synq_id_{tbl_name}"
                     -- we match against new and old because rowid may be updated.
@@ -363,18 +388,20 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 f'"{ref_col}" = NEW."{col}"'
                 for ref_col, col in zip(referred_cols, fk.columns)
             )
+            metadata += f"""
+            INSERT OR REPLACE INTO _synq_fk(fk_id, foreign_index, on_delete, on_update)
+            VALUES(
+                {field_id}, {foreign_index},
+                {FK_ACTION[normalize_fk_action(fk.on_delete, conf)]},
+                {FK_ACTION[normalize_fk_action(fk.on_update, conf)]}
+            );
+            """
             coma_fk_cols = ", ".join(f'"{col}"' for col in fk.columns)
             fk_insertion = f"""
                 -- handle case where at least one col is NULL
-                INSERT INTO _synq_fklog(
-                    ts, peer, row_ts, row_peer, fk_id,
-                    on_delete, on_update,
-                    foreign_index
-                )
+                INSERT INTO _synq_fklog(ts, peer, row_ts, row_peer, fk_id)
                 SELECT
-                    local.ts, local.peer, cur.row_ts, cur.row_peer, {field_id},
-                    {FK_ACTION[normalize_fk_action(fk.on_delete, conf)]}, {FK_ACTION[normalize_fk_action(fk.on_update, conf)]},
-                    {foreign_index}
+                    local.ts, local.peer, cur.row_ts, cur.row_peer, {field_id}
                 FROM _synq_local AS local, (
                     SELECT * FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid
                 ) AS cur;
@@ -438,7 +465,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 WHERE rowid = OLD."{rowid_aliases[0]}";
             END;
             """
-        result += textwrap.dedent(table_synq_id) + textwrap.dedent(triggers)
+        result += metadata + textwrap.dedent(table_synq_id) + textwrap.dedent(triggers)
     return result.strip()
 
 
@@ -588,7 +615,9 @@ _CONFLICT_RESOLUTION = f"""
 -- A.2. mark rows that are (directly/transitively) referenced by a
 -- ON DELETE RESTRICT ref
 UPDATE _synq_fklog SET mark = 1
-WHERE mark = 0 AND on_delete = 1;
+WHERE mark = 0 AND (
+    SELECT on_delete = 1 FROM _synq_fk WHERE _synq_fklog.fk_id = _synq_fk.fk_id
+);
 
 -- A.3. redo rows referenced by marked rows if undone
 INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
@@ -621,11 +650,9 @@ WHERE (
 
 -- B.2.. ON UPDATE CASCADE
 INSERT INTO _synq_fklog_effective(
-    row_ts, row_peer, fk_id,
-    on_delete, on_update, foreign_row_ts, foreign_row_peer, foreign_index
+    row_ts, row_peer, fk_id, foreign_row_ts, foreign_row_peer
 ) SELECT
-    fklog.row_ts, fklog.row_peer, fklog.fk_id,
-    fklog.on_delete, fklog.on_update, log.row_ts, log.row_peer, fklog.foreign_index
+    fklog.row_ts, fklog.row_peer, fklog.fk_id, log.row_ts, log.row_peer
 FROM _synq_context AS ctx, extern._synq_context AS ectx,
     _synq_log_effective AS log, _synq_fklog_effective AS fklog
 WHERE (
@@ -638,12 +665,8 @@ WHERE (
 ) AND fklog.on_update = 0;
 
 -- B.3.. ON UPDATE SET NULL
-INSERT INTO _synq_fklog_effective(
-    row_ts, row_peer, fk_id,
-    on_delete, on_update, foreign_index
-) SELECT
-    fklog.row_ts, fklog.row_peer, fklog.fk_id,
-    fklog.on_delete, fklog.on_update, fklog.foreign_index
+INSERT INTO _synq_fklog_effective(row_ts, row_peer, fk_id)
+SELECT fklog.row_ts, fklog.row_peer, fklog.fk_id
 FROM _synq_context AS ctx, extern._synq_context AS ectx,
     _synq_log_effective AS log, _synq_fklog_effective AS fklog
 WHERE (
@@ -689,14 +712,9 @@ FROM _synq_local AS local, _synq_fklog_extra
 WHERE mark = 0 AND on_delete <> 2; -- except SET NULL
 
 -- D.3. ON DELETE SET NULL
-INSERT INTO _synq_fklog_effective(
-    row_ts, row_peer, fk_id,
-    on_delete, on_update, foreign_index
-)
-SELECT
-    fklog.row_ts, fklog.row_peer, fklog.fk_id,
-    fklog.on_delete, fklog.on_update, fklog.foreign_index
-FROM _synq_fklog AS fklog
+INSERT INTO _synq_fklog_effective(row_ts, row_peer, fk_id)
+SELECT fklog.row_ts, fklog.row_peer, fklog.fk_id
+FROM _synq_fklog_extra AS fklog
 WHERE fklog.mark = 0 AND fklog.on_delete = 2; -- only SET NULL
 
 -- D.4. un-mark remaining rows
