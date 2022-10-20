@@ -49,7 +49,7 @@ SELECT sql FROM sqlite_master WHERE type = 'table' AND
 _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS _synq_local(
     rowid integer PRIMARY KEY DEFAULT 1 CHECK(rowid = 1),
-    peer integer NOT NULL DEFAULT (random() >> 16), -- 48bits of entropy
+    peer integer NOT NULL DEFAULT 0,
     ts integer NOT NULL DEFAULT 0 CHECK(ts >= 0),
     is_merging integer NOT NULL DEFAULT 0 CHECK(is_merging & 1 = is_merging)
 ) STRICT;
@@ -83,8 +83,8 @@ CREATE TABLE IF NOT EXISTS _synq_context(
 
 CREATE TABLE IF NOT EXISTS _synq_id(
     row_ts integer NOT NULL,
-    row_peer integer NOT NULL REFERENCES _synq_context(peer),
-    tbl text NOT NULL,
+    row_peer integer NOT NULL REFERENCES _synq_context(peer) ON DELETE CASCADE ON UPDATE CASCADE,
+    tbl integer NOT NULL,
     PRIMARY KEY(row_ts DESC, row_peer DESC),
     UNIQUE(row_peer, row_ts)
 ) STRICT, WITHOUT ROWID;
@@ -191,18 +191,13 @@ FROM _synq_fklog AS fklog
     LEFT JOIN _synq_undolog AS undo
         ON fklog.ts = undo.obj_ts AND fklog.peer = undo.obj_peer;
 
-DROP VIEW IF EXISTS _synq_fklog_active;
-CREATE VIEW         _synq_fklog_active AS
-SELECT fklog.*
-FROM _synq_fklog_extra AS fklog
-WHERE fklog.ul%2 = 0 AND fklog.ul%2 = 0;
-
 DROP VIEW IF EXISTS _synq_fklog_effective;
 CREATE VIEW         _synq_fklog_effective AS
-SELECT fklog.* FROM _synq_fklog_active AS fklog
-WHERE NOT EXISTS(
-    SELECT 1 FROM _synq_fklog_active AS self
-    WHERE self.row_ts = fklog.row_ts AND self.row_peer = fklog.row_peer AND self.fk_id = fklog.fk_id AND
+SELECT fklog.* FROM _synq_fklog_extra AS fklog
+WHERE fklog.ul%2=0 AND NOT EXISTS(
+    SELECT 1 FROM _synq_fklog_extra AS self
+    WHERE self.ul%2=0 AND
+        self.row_ts = fklog.row_ts AND self.row_peer = fklog.row_peer AND self.fk_id = fklog.fk_id AND
         (self.ts > fklog.ts OR (self.ts = fklog.ts AND self.peer > fklog.peer))
 );
 
@@ -251,210 +246,200 @@ END;
 """
 
 
-def _synq_triggers_for(tbl: sql.Table, tables: sql.Symbols, conf: Config) -> str:
+def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
     # FIXME: We do not support schema where:
     # - tables that reuse the name rowid
     # - without rowid tables (that's fine)
     # - rowid is aliased with no-autoinc column
     # - referred columns by a foreign key that are themselves a foreign key
     # - table with at least one column used in distinct foreign keys
-    tbl_name = tbl.name[0]
-    tbl_unique_columns = [x.columns() for x in utils.uniqueness(tbl)]
-    replicated_cols = utils.replicated_columns(tbl)
-    triggers = ""
-    # we use a dot (peer, ts) to globally and uniquely identify an object.
-    # An object is either a row or a log entry.
-    # _synq_id_{tbl} contains a mapping between rows (rowid) and their id (dot)
-    # We use the primary key of the table as a way to locally identify a row.
-    # In SQLITE ROWID tables have an implicit rowid column as real primary key.
-    # To simplify, we only support ROWID tables.
-    # We assume that rowid refers to the rowid column or an alias of that
-    # (any INTEGER PRIMARY KEY).
-    # We do not support the case where rowid is used to designate another col.
-    # _synq_id_{tbl} explicitly declares rowid when {tbl} aliases rowid.
-    # This enables to exhibit consistent behavior upon database vacuum,
-    # and so to keep rowid correspondence between {tbl} and _synq_id_{tbl}.
-    maybe_autoinc = " AUTOINCREMENT" if utils.primary_key(tbl).autoincrement else ""
-    maybe_rowid_alias = (
-        f"rowid integer PRIMARY KEY{maybe_autoinc},"
-        if utils.has_rowid_alias(tbl)
-        else ""
-    )
-    table_synq_id = f"""
-    CREATE TABLE IF NOT EXISTS "_synq_id_{tbl_name}"(
-        {maybe_rowid_alias}
-        row_ts integer NOT NULL,
-        row_peer integer NOT NULL,
-        UNIQUE(row_ts, row_peer),
-        FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
-            ON DELETE RESTRICT ON UPDATE CASCADE
-    ) STRICT;
-
-    DROP TRIGGER IF EXISTS "_synq_delete_{tbl_name}";
-    CREATE TRIGGER "_synq_delete_{tbl_name}"
-    AFTER DELETE ON "{tbl_name}" WHEN (SELECT NOT is_merging FROM _synq_local)
-    BEGIN
-        DELETE FROM "_synq_id_{tbl_name}" WHERE rowid = OLD.rowid;
-    END;
-
-    DROP TRIGGER IF EXISTS "_synq_delete_id_{tbl_name}";
-    CREATE TRIGGER "_synq_delete_id_{tbl_name}"
-    AFTER DELETE ON "_synq_id_{tbl_name}"
-    WHEN (SELECT NOT is_merging FROM _synq_local)
-    BEGIN
-        UPDATE _synq_local SET ts = ts + 1;
-
-        INSERT INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
-        SELECT local.ts, local.peer, OLD.row_ts, OLD.row_peer, 1
-        FROM _synq_local AS local
-        WHERE true  -- avoid parsing ambiguity
-        ON CONFLICT(row_ts, row_peer)
-        DO UPDATE SET ul = ul + 1, ts = excluded.ts, peer = excluded.peer;
-    END;
-    """
-    triggers = ""
-    insertions = ""
-    for i, col in enumerate(replicated_cols):
-        uniqueness_ids = [
-            i
-            for i in range(len(tbl_unique_columns))
-            if col.name in tbl_unique_columns[i]
-        ]
-        tbl_index = uniqueness_ids[0] if len(uniqueness_ids) > 0 else "NULL"
-        insertions += f"""
-        INSERT INTO _synq_log(ts, peer, row_ts, row_peer, col, val, tbl_index)
-        SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, {i}, NEW."{col.name}", {tbl_index}
-        FROM _synq_local AS local, (
-            SELECT * FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid
-        ) AS cur;
-        """.rstrip()
-    fk_insertions = ""
-    for fk_id, fk in enumerate(tbl.foreign_keys()):
-        foreign_tbl_name = fk.foreign_table.name[0]
-        foreign_tbl = tables.get(foreign_tbl_name)
-        assert foreign_tbl is not None
-        referred_cols = list(
-            fk.referred_columns
-            if fk.referred_columns is not None
-            else utils.primary_key(foreign_tbl).columns()
+    result = ""
+    field_id = 0
+    for (tbl_id, (tbl_name, tbl)) in enumerate(tables.items()):
+        tbl_unique_columns = [x.columns() for x in utils.uniqueness(tbl)]
+        replicated_cols = utils.replicated_columns(tbl)
+        triggers = ""
+        # we use a dot (peer, ts) to globally and uniquely identify an object.
+        # An object is either a row or a log entry.
+        # _synq_id_{tbl} contains a mapping between rows (rowid) and their id (dot)
+        # We use the primary key of the table as a way to locally identify a row.
+        # In SQLITE ROWID tables have an implicit rowid column as real primary key.
+        # To simplify, we only support ROWID tables.
+        # We assume that rowid refers to the rowid column or an alias of that
+        # (any INTEGER PRIMARY KEY).
+        # We do not support the case where rowid is used to designate another col.
+        # _synq_id_{tbl} explicitly declares rowid when {tbl} aliases rowid.
+        # This enables to exhibit consistent behavior upon database vacuum,
+        # and so to keep rowid correspondence between {tbl} and _synq_id_{tbl}.
+        maybe_autoinc = " AUTOINCREMENT" if utils.primary_key(tbl).autoincrement else ""
+        maybe_rowid_alias = (
+            f"rowid integer PRIMARY KEY{maybe_autoinc},"
+            if utils.has_rowid_alias(tbl)
+            else ""
         )
-        foreign_uniqueness = foreign_tbl.uniqueness()
-        foreign_index = next(
-            i
-            for i in range(len(foreign_uniqueness))
-            if list(foreign_uniqueness[i].columns()) == referred_cols
-        )
-        new_referred_match = " AND ".join(
-            f'"{ref_col}" = NEW."{col}"'
-            for ref_col, col in zip(referred_cols, fk.columns)
-        )
-        coma_fk_cols = ", ".join(f'"{col}"' for col in fk.columns)
-        fk_insertion = f"""
-            -- handle case where at least one col is NULL
-            INSERT INTO _synq_fklog(
-                ts, peer, row_ts, row_peer, fk_id,
-                on_delete, on_update,
-                foreign_index
-            )
-            SELECT
-                local.ts, local.peer, cur.row_ts, cur.row_peer, {fk_id},
-                {FK_ACTION[normalize_fk_action(fk.on_delete, conf)]}, {FK_ACTION[normalize_fk_action(fk.on_update, conf)]},
-                {foreign_index}
+        table_synq_id = f"""
+        CREATE TABLE IF NOT EXISTS "_synq_id_{tbl_name}"(
+            {maybe_rowid_alias}
+            row_ts integer NOT NULL,
+            row_peer integer NOT NULL,
+            UNIQUE(row_ts, row_peer),
+            FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
+                ON DELETE RESTRICT ON UPDATE CASCADE
+        ) STRICT;
+
+        DROP TRIGGER IF EXISTS "_synq_delete_{tbl_name}";
+        CREATE TRIGGER "_synq_delete_{tbl_name}"
+        AFTER DELETE ON "{tbl_name}" WHEN (SELECT NOT is_merging FROM _synq_local)
+        BEGIN
+            DELETE FROM "_synq_id_{tbl_name}" WHERE rowid = OLD.rowid;
+        END;
+
+        DROP TRIGGER IF EXISTS "_synq_delete_id_{tbl_name}";
+        CREATE TRIGGER "_synq_delete_id_{tbl_name}"
+        AFTER DELETE ON "_synq_id_{tbl_name}"
+        WHEN (SELECT NOT is_merging FROM _synq_local)
+        BEGIN
+            UPDATE _synq_local SET ts = ts + 1;
+
+            INSERT INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
+            SELECT local.ts, local.peer, OLD.row_ts, OLD.row_peer, 1
+            FROM _synq_local AS local
+            WHERE true  -- avoid parsing ambiguity
+            ON CONFLICT(row_ts, row_peer)
+            DO UPDATE SET ul = ul + 1, ts = excluded.ts, peer = excluded.peer;
+        END;
+        """
+        triggers = ""
+        insertions = ""
+        for col in replicated_cols:
+            uniqueness_ids = [
+                i
+                for i in range(len(tbl_unique_columns))
+                if col.name in tbl_unique_columns[i]
+            ]
+            tbl_index = uniqueness_ids[0] if len(uniqueness_ids) > 0 else "NULL"
+            insertions += f"""
+            INSERT INTO _synq_log(ts, peer, row_ts, row_peer, col, val, tbl_index)
+            SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, {field_id}, NEW."{col.name}", {tbl_index}
             FROM _synq_local AS local, (
                 SELECT * FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid
             ) AS cur;
+            """.rstrip()
+            triggers += f"""
+            DROP TRIGGER IF EXISTS "_synq_log_update_{tbl_name}_{col.name}";
+            CREATE TRIGGER "_synq_log_update_{tbl_name}_{col.name}"
+            AFTER UPDATE OF "{col.name}" ON "{tbl_name}"
+            WHEN (SELECT NOT is_merging FROM _synq_local)
+            BEGIN
+                UPDATE _synq_local SET ts = ts + 1; -- triggers clock update
 
-            UPDATE _synq_fklog SET
-                foreign_row_ts = target.row_ts,
-                foreign_row_peer = target.row_peer
-            FROM _synq_local AS local, (
-                SELECT row_ts, row_peer FROM "_synq_id_{foreign_tbl_name}"
-                WHERE rowid = (
-                    SELECT rowid FROM "{foreign_tbl_name}"
-                    WHERE {new_referred_match}
+                INSERT INTO _synq_log(ts, peer, row_ts, row_peer, col, val, tbl_index)
+                SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, {field_id}, NEW."{col.name}", {tbl_index}
+                FROM _synq_local AS local, (
+                    SELECT * FROM "_synq_id_{tbl_name}"
+                    -- we match against new and old because rowid may be updated.
+                    WHERE rowid = NEW.rowid OR rowid = OLD.rowid
+                ) AS cur;
+            END;
+            """.rstrip()
+            field_id += 1
+        fk_insertions = ""
+        for fk in tbl.foreign_keys():
+            foreign_tbl_name = fk.foreign_table.name[0]
+            foreign_tbl = tables.get(foreign_tbl_name)
+            assert foreign_tbl is not None
+            referred_cols = list(
+                fk.referred_columns
+                if fk.referred_columns is not None
+                else utils.primary_key(foreign_tbl).columns()
+            )
+            foreign_uniqueness = foreign_tbl.uniqueness()
+            foreign_index = next(
+                i
+                for i in range(len(foreign_uniqueness))
+                if list(foreign_uniqueness[i].columns()) == referred_cols
+            )
+            new_referred_match = " AND ".join(
+                f'"{ref_col}" = NEW."{col}"'
+                for ref_col, col in zip(referred_cols, fk.columns)
+            )
+            coma_fk_cols = ", ".join(f'"{col}"' for col in fk.columns)
+            fk_insertion = f"""
+                -- handle case where at least one col is NULL
+                INSERT INTO _synq_fklog(
+                    ts, peer, row_ts, row_peer, fk_id,
+                    on_delete, on_update,
+                    foreign_index
                 )
-            ) AS target
-            WHERE _synq_fklog.ts = local.ts AND _synq_fklog.peer = local.peer;
-        """.rstrip()
-        fk_insertions += fk_insertion
+                SELECT
+                    local.ts, local.peer, cur.row_ts, cur.row_peer, {field_id},
+                    {FK_ACTION[normalize_fk_action(fk.on_delete, conf)]}, {FK_ACTION[normalize_fk_action(fk.on_update, conf)]},
+                    {foreign_index}
+                FROM _synq_local AS local, (
+                    SELECT * FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid
+                ) AS cur;
+
+                UPDATE _synq_fklog SET
+                    foreign_row_ts = target.row_ts,
+                    foreign_row_peer = target.row_peer
+                FROM _synq_local AS local, (
+                    SELECT row_ts, row_peer FROM "_synq_id_{foreign_tbl_name}"
+                    WHERE rowid = (
+                        SELECT rowid FROM "{foreign_tbl_name}"
+                        WHERE {new_referred_match}
+                    )
+                ) AS target
+                WHERE _synq_fklog.ts = local.ts AND _synq_fklog.peer = local.peer;
+            """.rstrip()
+            fk_insertions += fk_insertion
+            triggers += f"""
+            DROP TRIGGER IF EXISTS "_synq_fk_update_{tbl_name}_fk{field_id}";
+            CREATE TRIGGER "_synq_fk_update_{tbl_name}_fk{field_id}"
+            AFTER UPDATE OF {coma_fk_cols} ON "{tbl_name}"
+            WHEN (SELECT NOT is_merging FROM _synq_local)
+            BEGIN
+                UPDATE _synq_local SET ts = ts + 1; -- triggers clock update
+
+                {fk_insertion}
+            END;
+            """.rstrip()
+            field_id += 1
         triggers += f"""
-        DROP TRIGGER IF EXISTS "_synq_fk_update_{tbl_name}_fk{fk_id}";
-        CREATE TRIGGER "_synq_fk_update_{tbl_name}_fk{fk_id}"
-        AFTER UPDATE OF {coma_fk_cols} ON "{tbl_name}"
+        DROP TRIGGER IF EXISTS "_synq_log_insert_{tbl_name}";
+        CREATE TRIGGER "_synq_log_insert_{tbl_name}"
+        AFTER INSERT ON "{tbl_name}"
         WHEN (SELECT NOT is_merging FROM _synq_local)
         BEGIN
+            -- handle INSERT OR REPLACE (DELETE if exists, then INSERT)
+            -- The delete trigger is not fired whether recursive triggers
+            -- are not enabled.
+            -- To ensure that the prexisting row is deleted, we attempt a deletion.
+            DELETE FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid;
+
             UPDATE _synq_local SET ts = ts + 1; -- triggers clock update
 
-            {fk_insertion}
+            INSERT INTO "_synq_id_{tbl_name}"(rowid, row_ts, row_peer)
+            SELECT NEW.rowid, ts, peer FROM _synq_local;
+
+            INSERT INTO _synq_id(row_ts, row_peer, tbl)
+            SELECT ts, peer, {tbl_id} FROM _synq_local;
+            {insertions}
+            {fk_insertions}
         END;
         """.rstrip()
-    triggers += f"""
-    DROP TRIGGER IF EXISTS "_synq_log_insert_{tbl_name}";
-    CREATE TRIGGER "_synq_log_insert_{tbl_name}"
-    AFTER INSERT ON "{tbl_name}"
-    WHEN (SELECT NOT is_merging FROM _synq_local)
-    BEGIN
-        -- handle INSERT OR REPLACE (DELETE if exists, then INSERT)
-        -- The delete trigger is not fired whether recursive triggers
-        -- are not enabled.
-        -- To ensure that the prexisting row is deleted, we attempt a deletion.
-        DELETE FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid;
-
-        UPDATE _synq_local SET ts = ts + 1; -- triggers clock update
-
-        INSERT INTO "_synq_id_{tbl_name}"(rowid, row_ts, row_peer)
-        SELECT NEW.rowid, ts, peer FROM _synq_local;
-
-        INSERT INTO _synq_id(row_ts, row_peer, tbl)
-        SELECT ts, peer, '{tbl_name}' FROM _synq_local;
-        {insertions}
-        {fk_insertions}
-    END;
-    """.rstrip()
-    rowid_aliases = utils.rowid_aliases(tbl)
-    if len(rowid_aliases) > 0:
-        triggers += f"""
-        DROP TRIGGER IF EXISTS "_synq_log_update_rowid_{tbl_name}_rowid";
-        CREATE TRIGGER "_synq_log_update_rowid_{tbl_name}_rowid"
-        AFTER UPDATE OF {", ".join(rowid_aliases)} ON "{tbl_name}"
-        BEGIN
-            UPDATE "_synq_id_{tbl_name}" SET rowid = NEW."{rowid_aliases[0]}"
-            WHERE rowid = OLD."{rowid_aliases[0]}";
-        END;
-        """
-    for i, col in enumerate(replicated_cols):
-        uniqueness_ids = [
-            i
-            for i in range(len(tbl_unique_columns))
-            if col.name in tbl_unique_columns[i]
-        ]
-        tbl_index = uniqueness_ids[0] if len(uniqueness_ids) != 0 else "NULL"
-        triggers += f"""
-    DROP TRIGGER IF EXISTS "_synq_log_update_{tbl_name}_{col.name}";
-    CREATE TRIGGER "_synq_log_update_{tbl_name}_{col.name}"
-    AFTER UPDATE OF "{col.name}" ON "{tbl_name}"
-    WHEN (SELECT NOT is_merging FROM _synq_local)
-    BEGIN
-        UPDATE _synq_local SET ts = ts + 1; -- triggers clock update
-
-        INSERT INTO _synq_log(ts, peer, row_ts, row_peer, col, val, tbl_index)
-        SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, {i}, NEW."{col.name}", {tbl_index}
-        FROM _synq_local AS local, (
-            SELECT * FROM "_synq_id_{tbl_name}"
-            -- we match against new and old because rowid may be updated.
-            WHERE rowid = NEW.rowid OR rowid = OLD.rowid
-        ) AS cur;
-    END;
-    """.rstrip()
-    return textwrap.dedent(table_synq_id) + textwrap.dedent(triggers)
-
-
-def _synq_script_for(tables: sql.Symbols, conf: Config) -> str:
-    return "".join(
-        _synq_triggers_for(tbl, tables, conf)
-        for tbl in tables.values()
-        if not utils.is_temp(tbl)
-    ).strip()
+        rowid_aliases = utils.rowid_aliases(tbl)
+        if len(rowid_aliases) > 0:
+            triggers += f"""
+            DROP TRIGGER IF EXISTS "_synq_log_update_rowid_{tbl_name}_rowid";
+            CREATE TRIGGER "_synq_log_update_rowid_{tbl_name}_rowid"
+            AFTER UPDATE OF {", ".join(rowid_aliases)} ON "{tbl_name}"
+            BEGIN
+                UPDATE "_synq_id_{tbl_name}" SET rowid = NEW."{rowid_aliases[0]}"
+                WHERE rowid = OLD."{rowid_aliases[0]}";
+            END;
+            """
+        result += textwrap.dedent(table_synq_id) + textwrap.dedent(triggers)
+    return result.strip()
 
 
 def _get_schema(db: sqlite3.Connection) -> str:
@@ -483,7 +468,7 @@ def init(
     tables = sql.symbols(parse_schema(sql_ar_schema))
     with closing(db.cursor()) as cursor:
         cursor.executescript(_CREATE_TABLES)
-        cursor.executescript(_synq_script_for(tables, conf))
+        cursor.executescript(_synq_triggers(tables, conf))
         if not conf.physical_clock:
             cursor.execute(f"DROP TRIGGER IF EXISTS _synq_local_clock;")
     _allocate_id(db, id=id)
@@ -676,7 +661,7 @@ WHERE (
 INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
 SELECT DISTINCT local.ts, local.peer, log.row_ts, log.row_peer, log.row_ul + 1
 FROM _synq_local AS local, _synq_log_effective AS log JOIN _synq_log_effective AS self
-        USING(tbl, col, tbl_index, val),
+        USING(col, tbl_index, val),
     _synq_context AS ctx, extern._synq_context AS ectx
 WHERE tbl_index IS NOT NULL AND (
     log.row_ts > self.row_ts OR (
@@ -745,23 +730,24 @@ WHERE _synq_context.peer = local.peer;
 def _create_pull(tables: sql.Symbols) -> str:
     result = ""
     merger = ""
-    for tbl in tables.values():
-        tbl_name = tbl.name[0]
+    field_id = 0
+    for tbl_id, (tbl_name, tbl) in enumerate(tables.items()):
         repl_col_names = map(lambda col: col.name, utils.replicated_columns(tbl))
         selectors: list[str] = ["id.rowid"]
         col_names: list[str] = ["rowid"]
-        for i, col_name in enumerate(repl_col_names):
+        for col_name in repl_col_names:
             col_names += [col_name]
             selectors += [
                 f'''(
-                SELECT log.val FROM _synq_log_active AS log
+                SELECT log.val FROM _synq_log_extra AS log
                 WHERE log.row_ts = id.row_ts AND log.row_peer = id.row_peer AND
-                    log.col = {i}
+                    log.col = {field_id} AND log.ul%2 = 0
                 ORDER BY log.ts DESC, log.peer DESC
                 LIMIT 1
             ) AS "{col_name}"'''
             ]
-        for fk_id, fk in enumerate(tbl.foreign_keys()):
+            field_id += 1
+        for fk in tbl.foreign_keys():
             f_tbl_name = fk.foreign_table.name[0]
             f_tbl = tables.get(f_tbl_name)
             assert f_tbl is not None
@@ -779,13 +765,13 @@ def _create_pull(tables: sql.Symbols) -> str:
                 selectors += [
                     f'''(
                     SELECT rw.rowid
-                    FROM _synq_fklog_active AS fklog
+                    FROM _synq_fklog_extra AS fklog
                         LEFT JOIN "_synq_id_{f_tbl_name}" AS rw
                         ON fklog.foreign_row_ts = rw.row_ts AND
                             fklog.foreign_row_peer = rw.row_peer
-                    WHERE fklog.row_ts = id.row_ts AND
+                    WHERE fklog.ul%2 = 0 AND fklog.row_ts = id.row_ts AND
                         fklog.row_peer = id.row_peer AND
-                        fklog.fk_id = {fk_id}
+                        fklog.fk_id = {field_id}
                     ORDER BY fklog.ts DESC, fklog.peer DESC
                     LIMIT 1
                 ) AS "{fk.columns[0]}"'''
@@ -800,31 +786,34 @@ def _create_pull(tables: sql.Symbols) -> str:
                     selectors += [
                         f'''(
                         SELECT log.val
-                        FROM _synq_fklog_active AS fklog
-                            LEFT JOIN _synq_log_active AS log
+                        FROM _synq_fklog_extra AS fklog
+                            LEFT JOIN _synq_log_extra AS log
                                 ON log.row_ts = fklog.foreign_row_ts AND
                                 log.row_peer = fklog.foreign_row_peer AND
-                                log.col = {j}
-                        WHERE fklog.row_ts = id.row_ts AND
+                                log.col = {j} AND log.ul%2 = 0
+                        WHERE fklog.ul%2 = 0 AND fklog.row_ts = id.row_ts AND
                             fklog.row_peer = id.row_peer AND
-                            fklog.fk_id = {fk_id}
+                            fklog.fk_id = {field_id}
                         ORDER BY fklog.ts DESC, fklog.peer DESC, log.ts DESC, log.peer DESC
                         LIMIT 1
                     ) AS "{col_name}"'''
                     ]
+            field_id += 1
         merger += f"""
         INSERT OR REPLACE INTO "{tbl_name}"({', '.join(col_names)})
         SELECT {', '.join(selectors)} FROM (
             SELECT id.rowid, id.row_ts, id.row_peer FROM (
                 SELECT log.row_ts, log.row_peer
-                FROM _synq_log_active AS log
+                FROM _synq_log_extra AS log
                     JOIN _synq_context AS ctx
-                        ON log.peer = ctx.peer AND log.ts > ctx.ts
+                        ON log.ul%2 = 0 AND log.peer = ctx.peer AND log.ts > ctx.ts
+                WHERE log.row_ul%2 = 0
                 UNION
                 SELECT fklog.row_ts, fklog.row_peer
-                FROM _synq_fklog_active AS fklog
+                FROM _synq_fklog_extra AS fklog
                     JOIN _synq_context AS ctx
-                        ON fklog.peer = ctx.peer AND fklog.ts > ctx.ts
+                        ON fklog.ul%2 = 0 AND fklog.peer = ctx.peer AND fklog.ts > ctx.ts
+                WHERE fklog.row_ul%2 = 0
                 UNION
                 SELECT redo.row_ts, redo.row_peer
                 FROM _synq_id_undo AS redo
@@ -871,7 +860,7 @@ def _create_pull(tables: sql.Symbols) -> str:
         SELECT id.row_peer, id.row_ts
         FROM _synq_id AS id JOIN _synq_context AS ctx
             ON id.row_ts > ctx.ts AND id.row_peer = ctx.peer
-        WHERE id.tbl = '{tbl_name}' AND NOT EXISTS(
+        WHERE id.tbl = {tbl_id} AND NOT EXISTS(
             SELECT 1 FROM _synq_id_undo AS undo
             WHERE undo.ul%2 = 1 AND
                 undo.row_ts = id.row_ts AND undo.row_peer = id.row_peer
@@ -885,7 +874,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                 ON redo.ts > ctx.ts AND redo.peer = ctx.peer
             JOIN _synq_id AS id
                 ON redo.row_ts = id.row_ts AND redo.row_peer = id.row_peer
-                    AND id.tbl = '{tbl_name}'
+                    AND id.tbl = {tbl_id}
         WHERE redo.ul%2 = 0;
         """
     result += merger
