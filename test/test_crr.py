@@ -70,6 +70,21 @@ def test_aliased_rowid(tmp_path: pathlib.Path) -> None:
             log={Undo(ts=(2, 1), obj=(1, 1), ul=1)},
         )
 
+        exec(a, "INSERT INTO X VALUES(1)")
+        exec(a, "INSERT OR REPLACE INTO X VALUES(1)")
+        assert crr_from(a) == Crr(
+            tbls={"X": {(1, (5, 1))}},
+            ctx={1: 5},
+            log={Undo(ts=(4, 1), obj=(3, 1), ul=1), Undo(ts=(2, 1), obj=(1, 1), ul=1)},
+        )
+
+        exec(a, "INSERT INTO X VALUES(1) ON CONFLICT(x) DO UPDATE SET x = 2")
+        assert crr_from(a) == Crr(
+            tbls={"X": {(2, (5, 1))}},
+            ctx={1: 5},
+            log={Undo(ts=(4, 1), obj=(3, 1), ul=1), Undo(ts=(2, 1), obj=(1, 1), ul=1)},
+        )
+
 
 def test_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
@@ -85,6 +100,30 @@ def test_repl_col(tmp_path: pathlib.Path) -> None:
         )
 
         exec(a, "UPDATE X SET v = 'v2'")
+        assert crr_from(a) == Crr(
+            tbls={"X": {("v2", (1, 1))}},
+            ctx={1: 2},
+            log={
+                Col(ts=(1, 1), row=(1, 1), col=0, val="v1"),
+                Col(ts=(2, 1), row=(1, 1), col=0, val="v2"),
+            },
+        )
+
+
+def test_repl_pk(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a:
+        exec(a, "PRAGMA foreign_keys=ON")
+        exec(a, "CREATE TABLE X(v any PRIMARY KEY)")
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
+
+        exec(a, "INSERT INTO X VALUES('v1')")
+        assert crr_from(a) == Crr(
+            tbls={"X": {("v1", (1, 1))}},
+            ctx={1: 1},
+            log={Col(ts=(1, 1), row=(1, 1), col=0, val="v1")},
+        )
+
+        exec(a, "INSERT INTO X VALUES('v1') ON CONFLICT(v) DO UPDATE SET v = 'v2'")
         assert crr_from(a) == Crr(
             tbls={"X": {("v2", (1, 1))}},
             ctx={1: 2},
