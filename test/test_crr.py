@@ -1104,3 +1104,24 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(5, 2), obj=(3, 2), ul=1),
             },
         )
+
+
+def test_spaced_names(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a:
+        exec(a, "PRAGMA foreign_keys=ON")
+        exec(a, 'CREATE TABLE "X "("x " any PRIMARY KEY)')
+        exec(
+            a,
+            'CREATE TABLE "Y "("x " integer REFERENCES "X "("x "))',
+        )
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        exec(a, 'INSERT INTO "X " VALUES(1)')
+        exec(a, 'INSERT INTO "Y "("x ") VALUES(1)')
+        assert crr_from(a) == Crr(
+            tbls={"X ": {(1, (1, 1))}, "Y ": {(1, (2, 1))}},
+            ctx={1: 2},
+            log={
+                Col(ts=(1, 1), row=(1, 1), col=0, val=1),
+                Ref(ts=(2, 1), row=(2, 1), fk=1, target=(1, 1)),
+            },
+        )
