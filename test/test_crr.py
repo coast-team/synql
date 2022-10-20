@@ -41,6 +41,28 @@ def test_aliased_rowid(tmp_path: pathlib.Path) -> None:
             log=set(),
         )
 
+        # Test rowid aliases (rowid, _rowid_, oid)
+        exec(a, "UPDATE X SET rowid = 3")
+        assert crr_from(a) == Crr(
+            tbls={"X": {(3, (1, 1))}},
+            ctx={1: 1},
+            log=set(),
+        )
+
+        exec(a, "UPDATE X SET _rowid_ = 4")
+        assert crr_from(a) == Crr(
+            tbls={"X": {(4, (1, 1))}},
+            ctx={1: 1},
+            log=set(),
+        )
+
+        exec(a, "UPDATE X SET oid = 5")
+        assert crr_from(a) == Crr(
+            tbls={"X": {(5, (1, 1))}},
+            ctx={1: 1},
+            log=set(),
+        )
+
         exec(a, "DELETE FROM X")
         assert crr_from(a) == Crr(
             tbls={"X": set()},
