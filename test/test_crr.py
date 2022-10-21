@@ -620,6 +620,48 @@ def test_multi_col_conflicting_keys(tmp_path: pathlib.Path) -> None:
         exec(a, "PRAGMA integrity_check")
 
 
+def test_multi_col_multi_covering_unique(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
+        exec(a, "PRAGMA foreign_keys=ON")
+        exec(a, "CREATE TABLE X(a int, b int, c int, UNIQUE(a,b), UNIQUE(b,c));")
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, id=2)
+        exec(a, "INSERT INTO X VALUES(1, 2, 3)")
+        exec(b, "INSERT INTO X VALUES(1, 4, 3)")
+        b.backup(b_bak)
+
+        crr.pull_from(b, tmp_path / "a.db")
+        assert crr_from(b) == Crr(
+            tbls={"X": {(1, 2, 3, (1, 1)), (1, 4, 3, (1, 2))}},
+            ctx={1: 1, 2: 1},
+            log={
+                Col(ts=(1, 1), row=(1, 1), col=0, val=1),
+                Col(ts=(1, 1), row=(1, 1), col=1, val=2),
+                Col(ts=(1, 1), row=(1, 1), col=2, val=3),
+                Col(ts=(1, 2), row=(1, 2), col=0, val=1),
+                Col(ts=(1, 2), row=(1, 2), col=1, val=4),
+                Col(ts=(1, 2), row=(1, 2), col=2, val=3),
+            },
+        )
+
+        crr.pull_from(a, tmp_path / "b.bak.db")
+        assert crr_from(a) == Crr(
+            tbls={"X": {(1, 2, 3, (1, 1)), (1, 4, 3, (1, 2))}},
+            ctx={1: 1, 2: 1},
+            log={
+                Col(ts=(1, 1), row=(1, 1), col=0, val=1),
+                Col(ts=(1, 1), row=(1, 1), col=1, val=2),
+                Col(ts=(1, 1), row=(1, 1), col=2, val=3),
+                Col(ts=(1, 2), row=(1, 2), col=0, val=1),
+                Col(ts=(1, 2), row=(1, 2), col=1, val=4),
+                Col(ts=(1, 2), row=(1, 2), col=2, val=3),
+            },
+        )
+        exec(a, "PRAGMA integrity_check")
+
+
 def test_past_conflicting_keys(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"

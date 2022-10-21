@@ -333,16 +333,12 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
         triggers = ""
         insertions = ""
         for col in replicated_cols:
-            uniqueness_ids = [
-                i
-                for i in range(len(tbl_unique_columns))
-                if col.name in tbl_unique_columns[i]
-            ]
-            if len(uniqueness_ids) > 0:
-                metadata += f"""
-                INSERT OR REPLACE INTO _synq_fields(field, tbl_index)
-                VALUES({field_id}, {uniqueness_ids[0]});
-                """.rstrip()
+            for i, uniq in enumerate(tbl_unique_columns):
+                if col.name in uniq:
+                    metadata += f"""
+                    INSERT OR REPLACE INTO _synq_fields(field, tbl_index)
+                    VALUES({field_id}, {i});
+                    """.rstrip()
             insertions += f"""
             INSERT INTO _synq_log(ts, peer, row_ts, row_peer, col, val)
             SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, {field_id}, NEW."{col.name}"
@@ -694,7 +690,7 @@ WHERE tbl_index IS NOT NULL AND (
     (log.ts > ctx.ts AND log.peer = ctx.peer AND self.ts > ectx.ts AND self.peer = ectx.peer) OR
     (log.ts > ectx.ts AND log.peer = ectx.peer AND self.ts > ctx.ts AND self.peer = ctx.peer)
 )
-GROUP BY log.row_ts, log.row_peer, self.row_ts, self.row_peer
+GROUP BY log.row_ts, log.row_peer, self.row_ts, self.row_peer, log.tbl_index
 HAVING count(*) >= (
     SELECT count(DISTINCT col) FROM _synq_log_effective
     WHERE row_ts = log.row_ts AND row_peer = log.row_peer AND tbl_index = log.tbl_index
