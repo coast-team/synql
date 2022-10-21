@@ -570,6 +570,56 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
         exec(a, "PRAGMA integrity_check")
 
 
+def test_multi_col_conflicting_keys(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
+        exec(a, "PRAGMA foreign_keys=ON")
+        exec(a, "CREATE TABLE X(a integer, b integer, UNIQUE(a, b));")
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, id=2)
+        exec(a, "INSERT INTO X VALUES(1, 2)")
+        exec(a, "INSERT INTO X VALUES(1, 3)")
+        exec(b, "INSERT INTO X VALUES(1, 2)")
+        exec(b, "INSERT INTO X VALUES(1, 4)")
+        b.backup(b_bak)
+
+        crr.pull_from(b, tmp_path / "a.db")
+        assert crr_from(b) == Crr(
+            tbls={"X": {(1, 2, (1, 1)), (1, 3, (2, 1)), (1, 4, (2, 2))}},
+            ctx={1: 2, 2: 3},
+            log={
+                Col(ts=(1, 1), row=(1, 1), col=0, val=1),
+                Col(ts=(1, 1), row=(1, 1), col=1, val=2),
+                Col(ts=(2, 1), row=(2, 1), col=0, val=1),
+                Col(ts=(2, 1), row=(2, 1), col=1, val=3),
+                Col(ts=(1, 2), row=(1, 2), col=0, val=1),
+                Col(ts=(1, 2), row=(1, 2), col=1, val=2),
+                Col(ts=(2, 2), row=(2, 2), col=0, val=1),
+                Col(ts=(2, 2), row=(2, 2), col=1, val=4),
+                Undo(ts=(3, 2), obj=(1, 2), ul=1),
+            },
+        )
+
+        crr.pull_from(a, tmp_path / "b.bak.db")
+        assert crr_from(a) == Crr(
+            tbls={"X": {(1, 2, (1, 1)), (1, 3, (2, 1)), (1, 4, (2, 2))}},
+            ctx={1: 3, 2: 2},
+            log={
+                Col(ts=(1, 1), row=(1, 1), col=0, val=1),
+                Col(ts=(1, 1), row=(1, 1), col=1, val=2),
+                Col(ts=(2, 1), row=(2, 1), col=0, val=1),
+                Col(ts=(2, 1), row=(2, 1), col=1, val=3),
+                Col(ts=(1, 2), row=(1, 2), col=0, val=1),
+                Col(ts=(1, 2), row=(1, 2), col=1, val=2),
+                Col(ts=(2, 2), row=(2, 2), col=0, val=1),
+                Col(ts=(2, 2), row=(2, 2), col=1, val=4),
+                Undo(ts=(3, 1), obj=(1, 2), ul=1),
+            },
+        )
+        exec(a, "PRAGMA integrity_check")
+
+
 def test_past_conflicting_keys(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
