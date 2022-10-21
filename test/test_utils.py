@@ -13,7 +13,7 @@ Ts = tuple[int | None, int | None]  # (ts, peer)
 class Col:
     ts: Ts
     row: Ts
-    col: int
+    field: int
     val: typing.Any
 
 
@@ -21,7 +21,7 @@ class Col:
 class Ref:
     ts: Ts
     row: Ts
-    fk: int
+    field: int
     target: Ts
 
 
@@ -71,9 +71,9 @@ def crr_from(db: sqlite3.Connection) -> Crr:
         )
     log = (
         {
-            Col(ts=(ts, peer), row=(row_ts, row_peer), col=col, val=val)
+            Col(ts=(ts, peer), row=(row_ts, row_peer), field=col, val=val)
             for ts, peer, row_ts, row_peer, col, val in fetch(
-                db, "SELECT ts, peer, row_ts, row_peer, col, val FROM _synq_log"
+                db, "SELECT ts, peer, row_ts, row_peer, field, val FROM _synq_log"
             )
         }
         .union(
@@ -81,12 +81,12 @@ def crr_from(db: sqlite3.Connection) -> Crr:
                 Ref(
                     ts=(ts, peer),
                     row=(row_ts, row_peer),
-                    fk=fk_id,
+                    field=fk_id,
                     target=(frow_ts, frow_peer),
                 )
                 for ts, peer, row_ts, row_peer, fk_id, frow_ts, frow_peer in fetch(
                     db,
-                    "SELECT ts, peer, row_ts, row_peer, fk_id, foreign_row_ts, foreign_row_peer FROM _synq_fklog",
+                    "SELECT ts, peer, row_ts, row_peer, field, foreign_row_ts, foreign_row_peer FROM _synq_fklog",
                 )
             }
         )
