@@ -145,10 +145,6 @@ CREATE TABLE IF NOT EXISTS _synq_fklog(
     field integer NOT NULL,
     foreign_row_ts integer DEFAULT NULL,
     foreign_row_peer integer DEFAULT NULL,
-    -- which tbl_index of the foreign row is used?
-    -- allow graph marking
-    -- 0: on delete mark, 1: on update mark
-    mark integer DEFAULT NULL,
     PRIMARY KEY(row_ts, row_peer, field, ts, peer),
     FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
         ON DELETE CASCADE ON UPDATE CASCADE,
@@ -231,10 +227,9 @@ BEGIN
 
     INSERT INTO _synq_fklog(
         ts, peer, row_ts, row_peer, field,
-        foreign_row_ts, foreign_row_peer, mark
+        foreign_row_ts, foreign_row_peer
     ) SELECT local.ts, local.peer, NEW.row_ts, NEW.row_peer, NEW.field,
-        NEW.foreign_row_ts, NEW.foreign_row_peer,
-        NEW.mark
+        NEW.foreign_row_ts, NEW.foreign_row_peer
     FROM _synq_local AS local;
 END;
 
@@ -249,32 +244,6 @@ SELECT
     fklog.ts, fklog.peer, fklog.row_ts, fklog.row_peer, fklog.field, fklog.tbl_index,
     fklog.foreign_row_ts AS val_p1, fklog.foreign_row_peer AS val_p2, fklog.row_ul
 FROM _synq_fklog_effective AS fklog;
-
--- following triggers are recursive triggers
-
-DROP TRIGGER IF EXISTS  _synq_fklog_on_delete_cascade_marking;
-CREATE TRIGGER          _synq_fklog_on_delete_cascade_marking
-AFTER UPDATE OF mark ON _synq_fklog WHEN (
-    OLD.mark is NULL AND NEW.mark = 0 AND
-    (SELECT on_delete = 0 FROM _synq_fk WHERE field = OLD.field)
-)
-BEGIN
-    UPDATE _synq_fklog SET mark = 0
-    WHERE foreign_row_ts = OLD.row_ts AND foreign_row_peer = OLD.row_peer AND
-        EXISTS (
-            SELECT 1 FROM _synq_fklog_effective AS fklog
-            WHERE _synq_fklog.ts = fklog.ts AND _synq_fklog.peer = fklog.peer
-        );
-END;
-
-DROP TRIGGER IF EXISTS  _synq_fklog_on_delete_restrict_marking;
-CREATE TRIGGER          _synq_fklog_on_delete_restrict_marking
-AFTER UPDATE OF mark ON _synq_fklog WHEN (OLD.mark = 0 AND NEW.mark = 1)
-BEGIN
-    UPDATE _synq_fklog SET mark = 1
-    WHERE row_ts = OLD.foreign_row_ts AND row_peer = OLD.foreign_row_peer AND
-        mark = OLD.mark;
-END;
 """
 
 
@@ -528,7 +497,6 @@ def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str) -> Non
     tables = sql.symbols(parse_schema(sql_ar_schema))
     merging = _create_pull(tables)
     result = f"""
-        PRAGMA recursive_triggers = ON;  -- automatically switch off at the end of db connection
         PRAGMA defer_foreign_keys = ON;  -- automatically switch off at the end of transaction
 
         ATTACH DATABASE '{remote_db_path}' AS extern;
@@ -598,54 +566,26 @@ DO UPDATE SET ul = excluded.ul, ts = excluded.ts, peer = excluded.peer
 WHERE ul < excluded.ul;
 """
 
-_MARK_DANGLING_REFS = """
--- Mark active rows that reference deleted rows.
--- We start with concurrent active rows and use a recursive trigger
--- to traverse the graph of references.
-UPDATE _synq_fklog SET mark = 0
-FROM _synq_context AS ctx, extern._synq_context AS ectx,
-    _synq_id_undo AS undo
-WHERE undo.ul%2 = 1 AND (
-    (undo.ts > ctx.ts AND undo.peer = ctx.peer) OR
-    (undo.ts > ectx.ts AND undo.peer = ectx.peer)
-) AND (
-    undo.row_ts = _synq_fklog.foreign_row_ts AND
-    undo.row_peer = _synq_fklog.foreign_row_peer
-) AND EXISTS (
-    SELECT 1 FROM _synq_fklog_effective AS fklog
-    WHERE _synq_fklog.ts = fklog.ts AND _synq_fklog.peer = fklog.peer
-);
-"""
-
-
 _CONFLICT_RESOLUTION = f"""
 -- Conflict resolution
 
 -- A. ON DELETE RESTRICT
-
--- A.1. mark active rows that reference deleted rows
-{_MARK_DANGLING_REFS}
-
--- A.2. mark rows that are (directly/transitively) referenced by a
--- ON DELETE RESTRICT ref
-UPDATE _synq_fklog SET mark = 1
-WHERE mark = 0 AND (
-    SELECT on_delete = 1 FROM _synq_fk WHERE _synq_fklog.field = _synq_fk.field
-);
-
--- A.3. redo rows referenced by marked rows if undone
 INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
-SELECT local.ts, local.peer, undo.row_ts, undo.row_peer, undo.ul + 1
-FROM _synq_local AS local, _synq_id_undo AS undo JOIN _synq_fklog AS fklog ON
-    undo.row_ts = fklog.foreign_row_ts AND
-    undo.row_peer = fklog.foreign_row_peer
-WHERE fklog.mark = 1 AND undo.ul%2 = 1;
-
--- A.4. un-mark remaining rows
-UPDATE _synq_fklog SET mark = NULL WHERE mark IS NOT NULL;
+WITH RECURSIVE restrict_refs(foreign_row_ts, foreign_row_peer) AS (
+    SELECT foreign_row_ts, foreign_row_peer
+    FROM _synq_fklog_effective
+    WHERE on_delete = 1 AND row_ul%2 = 0
+    UNION
+    SELECT target.foreign_row_ts, target.foreign_row_peer
+    FROM restrict_refs AS src JOIN _synq_fklog_effective AS target
+        ON src.foreign_row_ts = target.row_ts AND src.foreign_row_peer = target.row_peer
+)
+SELECT local.ts, local.peer, row_ts, row_peer, ul + 1
+FROM _synq_local AS local, restrict_refs JOIN _synq_id_undo
+    ON foreign_row_ts = row_ts AND foreign_row_peer = row_peer
+WHERE ul%2 = 1;
 
 -- B. ON UPDATE
-
 -- B.1. ON UPDATE RESTRICT
 -- undo all concurrent updates to a restrict ref
 INSERT OR REPLACE INTO _synq_undolog(ts, peer, obj_peer, obj_ts, ul)
@@ -715,25 +655,29 @@ HAVING count(*) >= (
     WHERE row_ts = log.row_ts AND row_peer = log.row_peer AND tbl_index = log.tbl_index
 );
 
--- D. ON DELETE CASCADE / SET NULL
-
--- D.1. mark active rows that reference deleted rows (same as A.1.)
-{_MARK_DANGLING_REFS}
-
--- D.2. ON DELETE CASCADE
+-- D. ON DELETE CASCADE
 INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
-SELECT local.ts, local.peer, row_ts, row_peer, row_ul + 1
-FROM _synq_local AS local, _synq_fklog_extra
-WHERE mark = 0 AND on_delete <> 2; -- except SET NULL
+WITH RECURSIVE dangling_refs(row_ts, row_peer, row_ul) AS (
+    SELECT fklog.row_ts, fklog.row_peer, fklog.row_ul
+    FROM _synq_fklog_effective AS fklog JOIN _synq_id_undo AS undo
+        ON fklog.foreign_row_ts = undo.row_ts AND fklog.foreign_row_peer = undo.row_peer
+    WHERE fklog.on_delete <> 2 AND fklog.row_ul%2 = 0 AND undo.ul%2 = 1
+    UNION
+    SELECT src.row_ts, src.row_peer, src.row_ul
+    FROM dangling_refs AS target JOIN _synq_fklog_effective AS src
+        ON src.foreign_row_ts = target.row_ts AND src.foreign_row_peer = target.row_peer
+    WHERE src.row_ul%2 = 0
+)
+SELECT local.ts, local.peer, row_ts, row_peer, row_ul+1
+FROM _synq_local AS local, dangling_refs
+WHERE row_ul%2 = 0;
 
--- D.3. ON DELETE SET NULL
+-- E. ON DELETE SET NULL
 INSERT INTO _synq_fklog_effective(row_ts, row_peer, field)
 SELECT fklog.row_ts, fklog.row_peer, fklog.field
-FROM _synq_fklog_extra AS fklog
-WHERE fklog.mark = 0 AND fklog.on_delete = 2; -- only SET NULL
-
--- D.4. un-mark remaining rows
-UPDATE _synq_fklog SET mark = NULL WHERE mark IS NOT NULL;
+FROM _synq_fklog_effective AS fklog JOIN _synq_id_undo AS undo
+    ON fklog.foreign_row_ts = undo.row_ts AND fklog.foreign_row_peer = undo.row_peer
+WHERE fklog.on_delete = 2 AND fklog.row_ul%2 = 0;
 """
 
 _MERGE_END = """
