@@ -633,13 +633,12 @@ WHERE (
 ) AND fklog.on_update = 2;
 
 -- C. resolve uniqueness conflicts
-
 -- undo latest rows with conflicting unique keys
 INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
 SELECT DISTINCT local.ts, local.peer, log.row_ts, log.row_peer, log.row_ul + 1
 FROM _synq_local AS local, _synq_unified_log_effective AS log JOIN _synq_unified_log_effective AS self
         ON log.field = self.field AND log.tbl_index = self.tbl_index AND
-            log.val_p1 IS self.val_p1 AND log.val_p2 IS self.val_p2,
+            log.val_p1 = self.val_p1 AND log.val_p2 IS self.val_p2,
     _synq_context AS ctx, extern._synq_context AS ectx
 WHERE (
     log.row_ts > self.row_ts OR (

@@ -570,6 +570,40 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
         exec(a, "PRAGMA integrity_check")
 
 
+def test_unique_nulls(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
+        exec(a, "PRAGMA foreign_keys=ON")
+        exec(a, "CREATE TABLE X(v any UNIQUE);")
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, id=2)
+        exec(a, "INSERT INTO X VALUES(NULL)")
+        exec(b, "INSERT INTO X VALUES(NULL)")
+        b.backup(b_bak)
+
+        crr.pull_from(b, tmp_path / "a.db")
+        assert crr_from(b) == Crr(
+            tbls={"X": {(None, (1, 1)), (None, (1, 2))}},
+            ctx={1: 1, 2: 1},
+            log={
+                Col(ts=(1, 1), row=(1, 1), field=0, val=None),
+                Col(ts=(1, 2), row=(1, 2), field=0, val=None),
+            },
+        )
+
+        crr.pull_from(a, tmp_path / "b.bak.db")
+        assert crr_from(a) == Crr(
+            tbls={"X": {(None, (1, 1)), (None, (1, 2))}},
+            ctx={1: 1, 2: 1},
+            log={
+                Col(ts=(1, 1), row=(1, 1), field=0, val=None),
+                Col(ts=(1, 2), row=(1, 2), field=0, val=None),
+            },
+        )
+        exec(a, "PRAGMA integrity_check")
+
+
 def test_multi_col_conflicting_keys(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
