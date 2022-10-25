@@ -3,12 +3,12 @@ from sqlschm import sql
 ANY = sql.Type(name="any")
 INTEGER = sql.Type(name="integer")
 
-ROWID_COL = sql.Column(name="rowid", type=INTEGER, constraints=[])
+ROWID_COL = sql.Column(name="rowid", type=INTEGER, constraints=tuple())
 
 
 """In SQLite ROWID is the primary key when no primary key is declared"""
 ROWID_PRIMARY_KEY = sql.Uniqueness(
-    indexed=[sql.Indexed(column="rowid")], is_primary=True
+    indexed=(sql.Indexed(column="rowid"),), is_primary=True
 )
 
 
@@ -25,7 +25,7 @@ def primary_key(tbl: sql.Table) -> sql.Uniqueness:
 
 def uniqueness(tbl: sql.Table) -> list[sql.Uniqueness]:
     pk = primary_key(tbl)
-    result = tbl.uniqueness()
+    result = list(tbl.uniqueness())
     if pk not in result:
         result = [pk] + result
     return result
@@ -83,3 +83,28 @@ def replicated_columns(tbl: sql.Table) -> list[sql.Column]:
         for col in tbl.columns
         if not is_generated(col) and col.name not in foreign_col_names
     ]
+
+
+def ids(
+    symbols: sql.Symbols,
+) -> dict[sql.Table | tuple[sql.Table, sql.Column | sql.TableConstraint], int]:
+    result: dict[
+        sql.Table | tuple[sql.Table, sql.Column | sql.TableConstraint], int
+    ] = {}
+    id = 0
+    for tbl in symbols.values():
+        result[tbl] = id
+        id += 1
+        for col in tbl.columns:
+            result[(tbl, col)] = id
+            id += 1
+        for cst in tbl.all_constraints():
+            result[(tbl, cst)] = id
+            id += 1
+    return result
+
+
+def cols(
+    tbl: sql.Table,
+) -> dict[str, sql.Column]:
+    return {col.name: col for col in tbl.columns}

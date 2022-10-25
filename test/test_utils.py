@@ -13,7 +13,7 @@ Ts = tuple[int | None, int | None]  # (ts, peer)
 class Col:
     ts: Ts
     row: Ts
-    field: int
+    name: str | int
     val: typing.Any
 
 
@@ -21,7 +21,7 @@ class Col:
 class Ref:
     ts: Ts
     row: Ts
-    field: int
+    name: str | int
     target: Ts
 
 
@@ -71,9 +71,10 @@ def crr_from(db: sqlite3.Connection) -> Crr:
         )
     log = (
         {
-            Col(ts=(ts, peer), row=(row_ts, row_peer), field=col, val=val)
-            for ts, peer, row_ts, row_peer, col, val in fetch(
-                db, "SELECT ts, peer, row_ts, row_peer, field, val FROM _synq_log"
+            Col(ts=(ts, peer), row=(row_ts, row_peer), name=name, val=val)
+            for ts, peer, row_ts, row_peer, name, val in fetch(
+                db,
+                "SELECT ts, peer, row_ts, row_peer, ifnull(name, field), val FROM _synq_log_extra",
             )
         }
         .union(
@@ -81,12 +82,12 @@ def crr_from(db: sqlite3.Connection) -> Crr:
                 Ref(
                     ts=(ts, peer),
                     row=(row_ts, row_peer),
-                    field=fk_id,
+                    name=name,
                     target=(frow_ts, frow_peer),
                 )
-                for ts, peer, row_ts, row_peer, fk_id, frow_ts, frow_peer in fetch(
+                for ts, peer, row_ts, row_peer, name, frow_ts, frow_peer in fetch(
                     db,
-                    "SELECT ts, peer, row_ts, row_peer, field, foreign_row_ts, foreign_row_peer FROM _synq_fklog",
+                    "SELECT ts, peer, row_ts, row_peer, ifnull(name, field), foreign_row_ts, foreign_row_peer FROM _synq_fklog_extra",
                 )
             }
         )

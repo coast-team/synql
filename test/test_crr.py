@@ -97,7 +97,7 @@ def test_repl_col(tmp_path: pathlib.Path) -> None:
         assert crr_from(a) == Crr(
             tbls={"X": {("v1", (1, 1))}},
             ctx={1: 1},
-            log={Col(ts=(1, 1), row=(1, 1), field=0, val="v1")},
+            log={Col(ts=(1, 1), row=(1, 1), name="v", val="v1")},
         )
 
         exec(a, "UPDATE X SET v = 'v2'")
@@ -105,8 +105,8 @@ def test_repl_col(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("v2", (1, 1))}},
             ctx={1: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val="v1"),
-                Col(ts=(2, 1), row=(1, 1), field=0, val="v2"),
+                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Col(ts=(2, 1), row=(1, 1), name="v", val="v2"),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -122,7 +122,7 @@ def test_repl_pk(tmp_path: pathlib.Path) -> None:
         assert crr_from(a) == Crr(
             tbls={"X": {("v1", (1, 1))}},
             ctx={1: 1},
-            log={Col(ts=(1, 1), row=(1, 1), field=0, val="v1")},
+            log={Col(ts=(1, 1), row=(1, 1), name="v", val="v1")},
         )
 
         exec(a, "INSERT INTO X VALUES('v1') ON CONFLICT(v) DO UPDATE SET v = 'v2'")
@@ -130,8 +130,8 @@ def test_repl_pk(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("v2", (1, 1))}},
             ctx={1: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val="v1"),
-                Col(ts=(2, 1), row=(1, 1), field=0, val="v2"),
+                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Col(ts=(2, 1), row=(1, 1), name="v", val="v2"),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -141,7 +141,10 @@ def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
         exec(a, "PRAGMA foreign_keys=ON")
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
-        exec(a, "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x))")
+        exec(
+            a,
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x))",
+        )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
 
         exec(a, "INSERT INTO X VALUES(1)")
@@ -150,7 +153,7 @@ def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 1))}},
             ctx={1: 2},
             log={
-                Ref(ts=(2, 1), row=(2, 1), field=0, target=(1, 1)),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
             },
         )
 
@@ -161,8 +164,8 @@ def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1)), (2, (3, 1))}, "Y": {(1, 2, (2, 1))}},
             ctx={1: 4},
             log={
-                Ref(ts=(2, 1), row=(2, 1), field=0, target=(1, 1)),
-                Ref(ts=(4, 1), row=(2, 1), field=0, target=(3, 1)),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Ref(ts=(4, 1), row=(2, 1), name="fk", target=(3, 1)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -172,7 +175,10 @@ def test_fk_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
         exec(a, "PRAGMA foreign_keys=ON")
         exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
-        exec(a, "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x))")
+        exec(
+            a,
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x))",
+        )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
         exec(a, "INSERT INTO Y VALUES(1, 1)")
@@ -184,8 +190,8 @@ def test_fk_repl_col(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Ref(ts=(2, 1), row=(2, 1), field=1, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
             },
         )
 
@@ -199,10 +205,10 @@ def test_fk_repl_col(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Ref(ts=(2, 1), row=(2, 1), field=1, target=(1, 1)),
-                Col(ts=(3, 1), row=(3, 1), field=0, val=2),
-                Ref(ts=(4, 1), row=(2, 1), field=1, target=(3, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Col(ts=(3, 1), row=(3, 1), name="x", val=2),
+                Ref(ts=(4, 1), row=(2, 1), name="fk", target=(3, 1)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -217,7 +223,7 @@ def test_fk_repl_multi_col(tmp_path: pathlib.Path) -> None:
         )
         exec(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x1 integer, x2 integer, FOREIGN KEY(x1,x2) REFERENCES X(x1, x2))",
+            "CREATE TABLE Y(y integer PRIMARY KEY, x1 integer, x2 integer, CONSTRAINT fk FOREIGN KEY(x1,x2) REFERENCES X(x1, x2))",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1, 2, 3)")
@@ -234,9 +240,9 @@ def test_fk_repl_multi_col(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=2),
-                Col(ts=(1, 1), row=(1, 1), field=1, val=3),
-                Ref(ts=(2, 1), row=(2, 1), field=2, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x1", val=2),
+                Col(ts=(1, 1), row=(1, 1), name="x2", val=3),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
             },
         )
 
@@ -255,12 +261,12 @@ def test_fk_repl_multi_col(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=2),
-                Col(ts=(1, 1), row=(1, 1), field=1, val=3),
-                Ref(ts=(2, 1), row=(2, 1), field=2, target=(1, 1)),
-                Col(ts=(3, 1), row=(3, 1), field=0, val=3),
-                Col(ts=(3, 1), row=(3, 1), field=1, val=4),
-                Ref(ts=(4, 1), row=(2, 1), field=2, target=(3, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x1", val=2),
+                Col(ts=(1, 1), row=(1, 1), name="x2", val=3),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Col(ts=(3, 1), row=(3, 1), name="x1", val=3),
+                Col(ts=(3, 1), row=(3, 1), name="x2", val=4),
+                Ref(ts=(4, 1), row=(2, 1), name="fk", target=(3, 1)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -272,7 +278,7 @@ def test_fk_up_cascade(tmp_path: pathlib.Path) -> None:
         exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON UPDATE CASCADE)",
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE CASCADE)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -283,10 +289,10 @@ def test_fk_up_cascade(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(1, 2, (2, 1))}},
             ctx={1: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Ref(ts=(2, 1), row=(2, 1), field=1, target=(1, 1)),
-                Ref(ts=(3, 1), row=(2, 1), field=1, target=(1, 1)),
-                Col(ts=(4, 1), row=(1, 1), field=0, val=2),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Ref(ts=(3, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Col(ts=(4, 1), row=(1, 1), name="x", val=2),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -298,7 +304,7 @@ def test_fk_up_set_null(tmp_path: pathlib.Path) -> None:
         exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON UPDATE SET NULL)",
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE SET NULL)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -309,10 +315,10 @@ def test_fk_up_set_null(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(1, None, (2, 1))}},
             ctx={1: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Ref(ts=(2, 1), row=(2, 1), field=1, target=(1, 1)),
-                Ref(ts=(3, 1), row=(2, 1), field=1, target=(None, None)),
-                Col(ts=(4, 1), row=(1, 1), field=0, val=2),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Ref(ts=(3, 1), row=(2, 1), name="fk", target=(None, None)),
+                Col(ts=(4, 1), row=(1, 1), name="x", val=2),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -390,7 +396,7 @@ def test_pull_repl_col(tmp_path: pathlib.Path) -> None:
         assert crr_from(b) == Crr(
             tbls={"X": {("v1", (1, 1))}},
             ctx={1: 1, 2: 0},
-            log={Col(ts=(1, 1), row=(1, 1), field=0, val="v1")},
+            log={Col(ts=(1, 1), row=(1, 1), name="v", val="v1")},
         )
 
         exec(a, "UPDATE X SET v = 'v2'")
@@ -399,8 +405,8 @@ def test_pull_repl_col(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("v2", (1, 1))}},
             ctx={1: 2, 2: 0},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val="v1"),
-                Col(ts=(2, 1), row=(1, 1), field=0, val="v2"),
+                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Col(ts=(2, 1), row=(1, 1), name="v", val="v2"),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -412,7 +418,10 @@ def test_pull_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
     ) as b:
         exec(a, "PRAGMA foreign_keys=ON")
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
-        exec(a, "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x))")
+        exec(
+            a,
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x))",
+        )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
 
@@ -423,7 +432,7 @@ def test_pull_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 1))}},
             ctx={1: 2, 2: 0},
             log={
-                Ref(ts=(2, 1), row=(2, 1), field=0, target=(1, 1)),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
             },
         )
 
@@ -442,8 +451,8 @@ def test_pull_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 4, 2: 0},
             log={
-                Ref(ts=(2, 1), row=(2, 1), field=0, target=(1, 1)),
-                Ref(ts=(4, 1), row=(2, 1), field=0, target=(3, 1)),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Ref(ts=(4, 1), row=(2, 1), name="fk", target=(3, 1)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -507,8 +516,8 @@ def test_concur_ins_repl_col(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 1, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val="a1"),
-                Col(ts=(1, 2), row=(1, 2), field=0, val="b1"),
+                Col(ts=(1, 1), row=(1, 1), name="v", val="a1"),
+                Col(ts=(1, 2), row=(1, 2), name="v", val="b1"),
             },
         )
 
@@ -525,10 +534,10 @@ def test_concur_ins_repl_col(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 3, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val="a1"),
-                Col(ts=(1, 2), row=(1, 2), field=0, val="b1"),
-                Col(ts=(3, 1), row=(1, 1), field=0, val="a2"),
-                Col(ts=(3, 2), row=(1, 1), field=0, val="b2"),
+                Col(ts=(1, 1), row=(1, 1), name="v", val="a1"),
+                Col(ts=(1, 2), row=(1, 2), name="v", val="b1"),
+                Col(ts=(3, 1), row=(1, 1), name="v", val="a2"),
+                Col(ts=(3, 2), row=(1, 1), name="v", val="b2"),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -551,8 +560,8 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("v1", (1, 1))}},
             ctx={1: 1, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val="v1"),
-                Col(ts=(1, 2), row=(1, 2), field=0, val="v1"),
+                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Col(ts=(1, 2), row=(1, 2), name="v", val="v1"),
                 Undo(ts=(2, 2), obj=(1, 2), ul=1),
             },
         )
@@ -562,8 +571,8 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("v1", (1, 1))}},
             ctx={1: 2, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val="v1"),
-                Col(ts=(1, 2), row=(1, 2), field=0, val="v1"),
+                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Col(ts=(1, 2), row=(1, 2), name="v", val="v1"),
                 Undo(ts=(2, 1), obj=(1, 2), ul=1),
             },
         )
@@ -587,8 +596,8 @@ def test_unique_nulls(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(None, (1, 1)), (None, (1, 2))}},
             ctx={1: 1, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=None),
-                Col(ts=(1, 2), row=(1, 2), field=0, val=None),
+                Col(ts=(1, 1), row=(1, 1), name="v", val=None),
+                Col(ts=(1, 2), row=(1, 2), name="v", val=None),
             },
         )
 
@@ -597,8 +606,8 @@ def test_unique_nulls(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(None, (1, 1)), (None, (1, 2))}},
             ctx={1: 1, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=None),
-                Col(ts=(1, 2), row=(1, 2), field=0, val=None),
+                Col(ts=(1, 1), row=(1, 1), name="v", val=None),
+                Col(ts=(1, 2), row=(1, 2), name="v", val=None),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -623,14 +632,14 @@ def test_multi_col_conflicting_keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, 2, (1, 1)), (1, 3, (2, 1)), (1, 4, (2, 2))}},
             ctx={1: 2, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(1, 1), row=(1, 1), field=1, val=2),
-                Col(ts=(2, 1), row=(2, 1), field=0, val=1),
-                Col(ts=(2, 1), row=(2, 1), field=1, val=3),
-                Col(ts=(1, 2), row=(1, 2), field=0, val=1),
-                Col(ts=(1, 2), row=(1, 2), field=1, val=2),
-                Col(ts=(2, 2), row=(2, 2), field=0, val=1),
-                Col(ts=(2, 2), row=(2, 2), field=1, val=4),
+                Col(ts=(1, 1), row=(1, 1), name="a", val=1),
+                Col(ts=(1, 1), row=(1, 1), name="b", val=2),
+                Col(ts=(2, 1), row=(2, 1), name="a", val=1),
+                Col(ts=(2, 1), row=(2, 1), name="b", val=3),
+                Col(ts=(1, 2), row=(1, 2), name="a", val=1),
+                Col(ts=(1, 2), row=(1, 2), name="b", val=2),
+                Col(ts=(2, 2), row=(2, 2), name="a", val=1),
+                Col(ts=(2, 2), row=(2, 2), name="b", val=4),
                 Undo(ts=(3, 2), obj=(1, 2), ul=1),
             },
         )
@@ -640,14 +649,14 @@ def test_multi_col_conflicting_keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, 2, (1, 1)), (1, 3, (2, 1)), (1, 4, (2, 2))}},
             ctx={1: 3, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(1, 1), row=(1, 1), field=1, val=2),
-                Col(ts=(2, 1), row=(2, 1), field=0, val=1),
-                Col(ts=(2, 1), row=(2, 1), field=1, val=3),
-                Col(ts=(1, 2), row=(1, 2), field=0, val=1),
-                Col(ts=(1, 2), row=(1, 2), field=1, val=2),
-                Col(ts=(2, 2), row=(2, 2), field=0, val=1),
-                Col(ts=(2, 2), row=(2, 2), field=1, val=4),
+                Col(ts=(1, 1), row=(1, 1), name="a", val=1),
+                Col(ts=(1, 1), row=(1, 1), name="b", val=2),
+                Col(ts=(2, 1), row=(2, 1), name="a", val=1),
+                Col(ts=(2, 1), row=(2, 1), name="b", val=3),
+                Col(ts=(1, 2), row=(1, 2), name="a", val=1),
+                Col(ts=(1, 2), row=(1, 2), name="b", val=2),
+                Col(ts=(2, 2), row=(2, 2), name="a", val=1),
+                Col(ts=(2, 2), row=(2, 2), name="b", val=4),
                 Undo(ts=(3, 1), obj=(1, 2), ul=1),
             },
         )
@@ -671,12 +680,12 @@ def test_multi_col_multi_covering_unique(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, 2, 3, (1, 1)), (1, 4, 3, (1, 2))}},
             ctx={1: 1, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(1, 1), row=(1, 1), field=1, val=2),
-                Col(ts=(1, 1), row=(1, 1), field=2, val=3),
-                Col(ts=(1, 2), row=(1, 2), field=0, val=1),
-                Col(ts=(1, 2), row=(1, 2), field=1, val=4),
-                Col(ts=(1, 2), row=(1, 2), field=2, val=3),
+                Col(ts=(1, 1), row=(1, 1), name="a", val=1),
+                Col(ts=(1, 1), row=(1, 1), name="b", val=2),
+                Col(ts=(1, 1), row=(1, 1), name="c", val=3),
+                Col(ts=(1, 2), row=(1, 2), name="a", val=1),
+                Col(ts=(1, 2), row=(1, 2), name="b", val=4),
+                Col(ts=(1, 2), row=(1, 2), name="c", val=3),
             },
         )
 
@@ -685,12 +694,12 @@ def test_multi_col_multi_covering_unique(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, 2, 3, (1, 1)), (1, 4, 3, (1, 2))}},
             ctx={1: 1, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(1, 1), row=(1, 1), field=1, val=2),
-                Col(ts=(1, 1), row=(1, 1), field=2, val=3),
-                Col(ts=(1, 2), row=(1, 2), field=0, val=1),
-                Col(ts=(1, 2), row=(1, 2), field=1, val=4),
-                Col(ts=(1, 2), row=(1, 2), field=2, val=3),
+                Col(ts=(1, 1), row=(1, 1), name="a", val=1),
+                Col(ts=(1, 1), row=(1, 1), name="b", val=2),
+                Col(ts=(1, 1), row=(1, 1), name="c", val=3),
+                Col(ts=(1, 2), row=(1, 2), name="a", val=1),
+                Col(ts=(1, 2), row=(1, 2), name="b", val=4),
+                Col(ts=(1, 2), row=(1, 2), name="c", val=3),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -702,7 +711,7 @@ def test_conflicting_unique_fk(tmp_path: pathlib.Path) -> None:
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
         exec(a, "PRAGMA foreign_keys=ON")
         exec(a, "CREATE TABLE X(x any PRIMARY KEY);")
-        exec(a, "CREATE TABLE Y(x any REFERENCES X(x) UNIQUE);")
+        exec(a, "CREATE TABLE Y(x any CONSTRAINT fk REFERENCES X(x) UNIQUE);")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
         crr.clone_to(a, b, id=2)
@@ -715,9 +724,9 @@ def test_conflicting_unique_fk(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, (2, 1))}},
             ctx={1: 2, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Ref(ts=(2, 1), row=(2, 1), field=1, target=(1, 1)),
-                Ref(ts=(2, 2), row=(2, 2), field=1, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(3, 2), obj=(2, 2), ul=1),
             },
         )
@@ -727,9 +736,9 @@ def test_conflicting_unique_fk(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, (2, 1))}},
             ctx={1: 3, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Ref(ts=(2, 1), row=(2, 1), field=1, target=(1, 1)),
-                Ref(ts=(2, 2), row=(2, 2), field=1, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(3, 1), obj=(2, 2), ul=1),
             },
         )
@@ -743,7 +752,8 @@ def test_multi_col_fk_multi_covering_unique(tmp_path: pathlib.Path) -> None:
         exec(a, "PRAGMA foreign_keys=ON")
         exec(a, "CREATE TABLE X(x any PRIMARY KEY);")
         exec(
-            a, "CREATE TABLE Y(y any PRIMARY KEY, x any REFERENCES X(x), UNIQUE(y, x));"
+            a,
+            "CREATE TABLE Y(y any PRIMARY KEY, x any CONSTRAINT fk REFERENCES X(x), UNIQUE(y, x));",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -758,13 +768,13 @@ def test_multi_col_fk_multi_covering_unique(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 1)), (2, 1, (3, 2))}},
             ctx={1: 2, 2: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(2, 1), row=(2, 1), field=1, val=1),
-                Ref(ts=(2, 1), row=(2, 1), field=2, target=(1, 1)),
-                Col(ts=(2, 2), row=(2, 2), field=1, val=1),
-                Ref(ts=(2, 2), row=(2, 2), field=2, target=(1, 1)),
-                Col(ts=(3, 2), row=(3, 2), field=1, val=2),
-                Ref(ts=(3, 2), row=(3, 2), field=2, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Col(ts=(2, 1), row=(2, 1), name="y", val=1),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Col(ts=(2, 2), row=(2, 2), name="y", val=1),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Col(ts=(3, 2), row=(3, 2), name="y", val=2),
+                Ref(ts=(3, 2), row=(3, 2), name="fk", target=(1, 1)),
                 Undo(ts=(4, 2), obj=(2, 2), ul=1),
             },
         )
@@ -774,13 +784,13 @@ def test_multi_col_fk_multi_covering_unique(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 1)), (2, 1, (3, 2))}},
             ctx={1: 4, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(2, 1), row=(2, 1), field=1, val=1),
-                Ref(ts=(2, 1), row=(2, 1), field=2, target=(1, 1)),
-                Col(ts=(2, 2), row=(2, 2), field=1, val=1),
-                Ref(ts=(2, 2), row=(2, 2), field=2, target=(1, 1)),
-                Col(ts=(3, 2), row=(3, 2), field=1, val=2),
-                Ref(ts=(3, 2), row=(3, 2), field=2, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Col(ts=(2, 1), row=(2, 1), name="y", val=1),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Col(ts=(2, 2), row=(2, 2), name="y", val=1),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Col(ts=(3, 2), row=(3, 2), name="y", val=2),
+                Ref(ts=(3, 2), row=(3, 2), name="fk", target=(1, 1)),
                 Undo(ts=(4, 1), obj=(2, 2), ul=1),
             },
         )
@@ -805,9 +815,9 @@ def test_past_conflicting_keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("v2", (1, 1)), ("v1", (1, 2))}},
             ctx={1: 2, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val="v1"),
-                Col(ts=(2, 1), row=(1, 1), field=0, val="v2"),
-                Col(ts=(1, 2), row=(1, 2), field=0, val="v1"),
+                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Col(ts=(2, 1), row=(1, 1), name="v", val="v2"),
+                Col(ts=(1, 2), row=(1, 2), name="v", val="v1"),
             },
         )
 
@@ -816,9 +826,9 @@ def test_past_conflicting_keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("v2", (1, 1)), ("v1", (1, 2))}},
             ctx={1: 2, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val="v1"),
-                Col(ts=(2, 1), row=(1, 1), field=0, val="v2"),
-                Col(ts=(1, 2), row=(1, 2), field=0, val="v1"),
+                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Col(ts=(2, 1), row=(1, 1), name="v", val="v2"),
+                Col(ts=(1, 2), row=(1, 2), name="v", val="v1"),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -842,12 +852,12 @@ def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("u1", "v1", (1, 1))}},
             ctx={1: 2, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val="u1"),
-                Col(ts=(1, 1), row=(1, 1), field=1, val="v1"),
-                Col(ts=(2, 1), row=(2, 1), field=0, val="u2"),
-                Col(ts=(2, 1), row=(2, 1), field=1, val="v2"),
-                Col(ts=(1, 2), row=(1, 2), field=0, val="u1"),
-                Col(ts=(1, 2), row=(1, 2), field=1, val="v2"),
+                Col(ts=(1, 1), row=(1, 1), name="u", val="u1"),
+                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Col(ts=(2, 1), row=(2, 1), name="u", val="u2"),
+                Col(ts=(2, 1), row=(2, 1), name="v", val="v2"),
+                Col(ts=(1, 2), row=(1, 2), name="u", val="u1"),
+                Col(ts=(1, 2), row=(1, 2), name="v", val="v2"),
                 Undo(ts=(3, 2), obj=(1, 2), ul=1),
                 Undo(ts=(3, 2), obj=(2, 1), ul=1),
             },
@@ -858,12 +868,12 @@ def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("u1", "v1", (1, 1))}},
             ctx={1: 3, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val="u1"),
-                Col(ts=(1, 1), row=(1, 1), field=1, val="v1"),
-                Col(ts=(2, 1), row=(2, 1), field=0, val="u2"),
-                Col(ts=(2, 1), row=(2, 1), field=1, val="v2"),
-                Col(ts=(1, 2), row=(1, 2), field=0, val="u1"),
-                Col(ts=(1, 2), row=(1, 2), field=1, val="v2"),
+                Col(ts=(1, 1), row=(1, 1), name="u", val="u1"),
+                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Col(ts=(2, 1), row=(2, 1), name="u", val="u2"),
+                Col(ts=(2, 1), row=(2, 1), name="v", val="v2"),
+                Col(ts=(1, 2), row=(1, 2), name="u", val="u1"),
+                Col(ts=(1, 2), row=(1, 2), name="v", val="v2"),
                 Undo(ts=(3, 1), obj=(1, 2), ul=1),
                 Undo(ts=(3, 1), obj=(2, 1), ul=1),
             },
@@ -879,7 +889,7 @@ def test_concur_del_fk_restrict_aliased_rowid(tmp_path: pathlib.Path) -> None:
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE RESTRICT)",
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -893,7 +903,7 @@ def test_concur_del_fk_restrict_aliased_rowid(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 3, 2: 2},
             log={
-                Ref(ts=(2, 2), row=(2, 2), field=0, target=(1, 1)),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(3, 1), obj=(1, 1), ul=2),
             },
         )
@@ -903,7 +913,7 @@ def test_concur_del_fk_restrict_aliased_rowid(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 2, 2: 3},
             log={
-                Ref(ts=(2, 2), row=(2, 2), field=0, target=(1, 1)),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(3, 2), obj=(1, 1), ul=2),
             },
         )
@@ -918,7 +928,7 @@ def test_concur_past_del_fk_restrict(tmp_path: pathlib.Path) -> None:
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE RESTRICT)",
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -935,8 +945,8 @@ def test_concur_past_del_fk_restrict(tmp_path: pathlib.Path) -> None:
             ctx={1: 2, 2: 4},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
-                Ref(ts=(2, 2), row=(2, 2), field=0, target=(1, 1)),
-                Ref(ts=(4, 2), row=(2, 2), field=0, target=(3, 2)),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Ref(ts=(4, 2), row=(2, 2), name="fk", target=(3, 2)),
             },
         )
 
@@ -946,8 +956,8 @@ def test_concur_past_del_fk_restrict(tmp_path: pathlib.Path) -> None:
             ctx={1: 2, 2: 4},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
-                Ref(ts=(2, 2), row=(2, 2), field=0, target=(1, 1)),
-                Ref(ts=(4, 2), row=(2, 2), field=0, target=(3, 2)),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Ref(ts=(4, 2), row=(2, 2), name="fk", target=(3, 2)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -961,7 +971,7 @@ def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
         exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE RESTRICT)",
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -975,8 +985,8 @@ def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 3, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Ref(ts=(2, 2), row=(2, 2), field=1, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(3, 1), obj=(1, 1), ul=2),
             },
         )
@@ -986,8 +996,8 @@ def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 2, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Ref(ts=(2, 2), row=(2, 2), field=1, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(3, 2), obj=(1, 1), ul=2),
             },
         )
@@ -1002,11 +1012,11 @@ def test_concur_del_fk_restrict_rec(tmp_path: pathlib.Path) -> None:
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE CASCADE)",
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk1 REFERENCES X(x) ON DELETE CASCADE)",
         )
         exec(
             a,
-            "CREATE TABLE Z(z integer PRIMARY KEY, y integer REFERENCES Y(y) ON DELETE RESTRICT)",
+            "CREATE TABLE Z(z integer PRIMARY KEY, y integer CONSTRAINT fk2 REFERENCES Y(y) ON DELETE RESTRICT)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -1021,8 +1031,8 @@ def test_concur_del_fk_restrict_rec(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}, "Z": {(1, 1, (3, 2))}},
             ctx={1: 4, 2: 3},
             log={
-                Ref(ts=(2, 2), row=(2, 2), field=0, target=(1, 1)),
-                Ref(ts=(3, 2), row=(3, 2), field=1, target=(2, 2)),
+                Ref(ts=(2, 2), row=(2, 2), name="fk1", target=(1, 1)),
+                Ref(ts=(3, 2), row=(3, 2), name="fk2", target=(2, 2)),
                 Undo(ts=(4, 1), obj=(1, 1), ul=2),
             },
         )
@@ -1032,8 +1042,8 @@ def test_concur_del_fk_restrict_rec(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}, "Z": {(1, 1, (3, 2))}},
             ctx={1: 2, 2: 4},
             log={
-                Ref(ts=(2, 2), row=(2, 2), field=0, target=(1, 1)),
-                Ref(ts=(3, 2), row=(3, 2), field=1, target=(2, 2)),
+                Ref(ts=(2, 2), row=(2, 2), name="fk1", target=(1, 1)),
+                Ref(ts=(3, 2), row=(3, 2), name="fk2", target=(2, 2)),
                 Undo(ts=(4, 2), obj=(1, 1), ul=2),
             },
         )
@@ -1048,7 +1058,7 @@ def test_concur_del_fk_cascade(tmp_path: pathlib.Path) -> None:
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE CASCADE)",
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON DELETE CASCADE)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -1063,7 +1073,7 @@ def test_concur_del_fk_cascade(tmp_path: pathlib.Path) -> None:
             ctx={1: 3, 2: 2},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
-                Ref(ts=(2, 2), row=(2, 2), field=0, target=(1, 1)),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(3, 1), obj=(2, 2), ul=1),
             },
         )
@@ -1074,7 +1084,7 @@ def test_concur_del_fk_cascade(tmp_path: pathlib.Path) -> None:
             ctx={1: 2, 2: 3},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
-                Ref(ts=(2, 2), row=(2, 2), field=0, target=(1, 1)),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(3, 2), obj=(2, 2), ul=1),
             },
         )
@@ -1089,7 +1099,7 @@ def test_concur_del_fk_set_null(tmp_path: pathlib.Path) -> None:
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON DELETE SET NULL)",
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON DELETE SET NULL)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -1104,8 +1114,8 @@ def test_concur_del_fk_set_null(tmp_path: pathlib.Path) -> None:
             ctx={1: 4, 2: 2},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
-                Ref(ts=(2, 2), row=(2, 2), field=0, target=(1, 1)),
-                Ref(ts=(4, 1), row=(2, 2), field=0, target=(None, None)),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Ref(ts=(4, 1), row=(2, 2), name="fk", target=(None, None)),
             },
         )
 
@@ -1115,8 +1125,8 @@ def test_concur_del_fk_set_null(tmp_path: pathlib.Path) -> None:
             ctx={1: 2, 2: 4},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
-                Ref(ts=(2, 2), row=(2, 2), field=0, target=(1, 1)),
-                Ref(ts=(4, 2), row=(2, 2), field=0, target=(None, None)),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Ref(ts=(4, 2), row=(2, 2), name="fk", target=(None, None)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -1130,7 +1140,7 @@ def test_concur_up_fk_restrict(tmp_path: pathlib.Path) -> None:
         exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON UPDATE RESTRICT)",
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE RESTRICT)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -1144,9 +1154,9 @@ def test_concur_up_fk_restrict(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 3, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(2, 1), row=(1, 1), field=0, val=2),
-                Ref(ts=(2, 2), row=(2, 2), field=1, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(3, 1), obj=(2, 1), ul=1),
             },
         )
@@ -1156,9 +1166,9 @@ def test_concur_up_fk_restrict(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 2, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(2, 1), row=(1, 1), field=0, val=2),
-                Ref(ts=(2, 2), row=(2, 2), field=1, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(3, 2), obj=(2, 1), ul=1),
             },
         )
@@ -1173,7 +1183,7 @@ def test_concur_up2_fk_restrict(tmp_path: pathlib.Path) -> None:
         exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON UPDATE RESTRICT)",
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE RESTRICT)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -1188,10 +1198,10 @@ def test_concur_up2_fk_restrict(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 4, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(2, 1), row=(1, 1), field=0, val=2),
-                Col(ts=(3, 1), row=(1, 1), field=0, val=3),
-                Ref(ts=(2, 2), row=(2, 2), field=1, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Col(ts=(3, 1), row=(1, 1), name="x", val=3),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(4, 1), obj=(2, 1), ul=1),
                 Undo(ts=(4, 1), obj=(3, 1), ul=1),
             },
@@ -1202,10 +1212,10 @@ def test_concur_up2_fk_restrict(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 3, 2: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(2, 1), row=(1, 1), field=0, val=2),
-                Col(ts=(3, 1), row=(1, 1), field=0, val=3),
-                Ref(ts=(2, 2), row=(2, 2), field=1, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Col(ts=(3, 1), row=(1, 1), name="x", val=3),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(4, 2), obj=(2, 1), ul=1),
                 Undo(ts=(4, 2), obj=(3, 1), ul=1),
             },
@@ -1221,7 +1231,7 @@ def test_concur_up_fk_cascade(tmp_path: pathlib.Path) -> None:
         exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON UPDATE CASCADE)",
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE CASCADE)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -1235,10 +1245,10 @@ def test_concur_up_fk_cascade(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(1, 2, (2, 2))}},
             ctx={1: 4, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(2, 1), row=(1, 1), field=0, val=2),
-                Ref(ts=(2, 2), row=(2, 2), field=1, target=(1, 1)),
-                Ref(ts=(4, 1), row=(2, 2), field=1, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Ref(ts=(4, 1), row=(2, 2), name="fk", target=(1, 1)),
             },
         )
 
@@ -1247,10 +1257,10 @@ def test_concur_up_fk_cascade(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(1, 2, (2, 2))}},
             ctx={1: 2, 2: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(2, 1), row=(1, 1), field=0, val=2),
-                Ref(ts=(2, 2), row=(2, 2), field=1, target=(1, 1)),
-                Ref(ts=(4, 2), row=(2, 2), field=1, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Ref(ts=(4, 2), row=(2, 2), name="fk", target=(1, 1)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -1264,7 +1274,7 @@ def test_concur_up_fk_set_null(tmp_path: pathlib.Path) -> None:
         exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer REFERENCES X(x) ON UPDATE SET NULL)",
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE SET NULL)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -1278,10 +1288,10 @@ def test_concur_up_fk_set_null(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(1, None, (2, 2))}},
             ctx={1: 4, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(2, 1), row=(1, 1), field=0, val=2),
-                Ref(ts=(2, 2), row=(2, 2), field=1, target=(1, 1)),
-                Ref(ts=(4, 1), row=(2, 2), field=1, target=(None, None)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Ref(ts=(4, 1), row=(2, 2), name="fk", target=(None, None)),
             },
         )
 
@@ -1290,10 +1300,10 @@ def test_concur_up_fk_set_null(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(1, None, (2, 2))}},
             ctx={1: 2, 2: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(2, 1), row=(1, 1), field=0, val=2),
-                Ref(ts=(2, 2), row=(2, 2), field=1, target=(1, 1)),
-                Ref(ts=(4, 2), row=(2, 2), field=1, target=(None, None)),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Ref(ts=(4, 2), row=(2, 2), name="fk", target=(None, None)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -1307,7 +1317,7 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
         exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(x integer REFERENCES X(x) ON DELETE RESTRICT ON UPDATE CASCADE)",
+            "CREATE TABLE Y(x integer CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT ON UPDATE CASCADE)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -1323,12 +1333,12 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(2, (2, 2))}},
             ctx={1: 5, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(2, 1), row=(1, 1), field=0, val=2),
-                Ref(ts=(2, 2), row=(2, 2), field=1, target=(1, 1)),
-                Col(ts=(3, 2), row=(3, 2), field=0, val=2),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Col(ts=(3, 2), row=(3, 2), name="x", val=2),
                 Undo(ts=(4, 1), obj=(1, 1), ul=2),
-                Ref(ts=(5, 1), row=(2, 2), field=1, target=(1, 1)),
+                Ref(ts=(5, 1), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(5, 1), obj=(3, 2), ul=1),
             },
         )
@@ -1338,12 +1348,12 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(2, (2, 2))}},
             ctx={1: 3, 2: 5},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Col(ts=(2, 1), row=(1, 1), field=0, val=2),
-                Ref(ts=(2, 2), row=(2, 2), field=1, target=(1, 1)),
-                Col(ts=(3, 2), row=(3, 2), field=0, val=2),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Col(ts=(3, 2), row=(3, 2), name="x", val=2),
                 Undo(ts=(4, 2), obj=(1, 1), ul=2),
-                Ref(ts=(5, 2), row=(2, 2), field=1, target=(1, 1)),
+                Ref(ts=(5, 2), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(5, 2), obj=(3, 2), ul=1),
             },
         )
@@ -1356,7 +1366,7 @@ def test_spaced_names(tmp_path: pathlib.Path) -> None:
         exec(a, 'CREATE TABLE "X "("x " any PRIMARY KEY)')
         exec(
             a,
-            'CREATE TABLE "Y "("x " integer REFERENCES "X "("x "))',
+            'CREATE TABLE "Y "("x " integer CONSTRAINT fk REFERENCES "X "("x "))',
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, 'INSERT INTO "X " VALUES(1)')
@@ -1365,8 +1375,8 @@ def test_spaced_names(tmp_path: pathlib.Path) -> None:
             tbls={"X ": {(1, (1, 1))}, "Y ": {(1, (2, 1))}},
             ctx={1: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), field=0, val=1),
-                Ref(ts=(2, 1), row=(2, 1), field=1, target=(1, 1)),
+                Col(ts=(1, 1), row=(1, 1), name="x ", val=1),
+                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
             },
         )
         exec(a, "PRAGMA integrity_check")
