@@ -101,18 +101,6 @@ CREATE TABLE IF NOT EXISTS _synq_id_undo(
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS _synq_id_undo_index_ts ON _synq_id_undo(peer, ts);
 
-DROP VIEW IF EXISTS _synq_id_extra;
-CREATE VIEW         _synq_id_extra AS
-SELECT id.row_ts, id.row_peer, id.tbl, tbl_data.name, ifnull(undo.ul, 0) AS row_ul
-FROM _synq_id AS id
-    LEFT JOIN _synq_id_undo AS undo USING(row_ts, row_peer)
-    LEFT JOIN _synq_names AS tbl_data ON tbl = tbl_data.id;
-
-CREATE TABLE IF NOT EXISTS _synq_names(
-    id integer NOT NULL PRIMARY KEY,
-    name text NOT NULL
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS _synq_uniqueness(
     field integer NOT NULL,
     tbl_index integer NOT NULL,
@@ -169,17 +157,15 @@ CREATE INDEX IF NOT EXISTS _synq_undolog_ts ON _synq_undolog(peer, ts);
 DROP VIEW IF EXISTS _synq_log_extra;
 CREATE VIEW         _synq_log_extra AS
 SELECT log.*,
-    id.tbl, ifnull(undo.ul, 0) AS ul, id.row_ul,
-    fields.tbl_index, field_data.name
+    ifnull(undo.ul, 0) AS ul, ifnull(tbl_undo.ul, 0) AS row_ul,
+    fields.tbl_index
 FROM _synq_log AS log
-    LEFT JOIN _synq_id_extra AS id
+    LEFT JOIN _synq_id_undo AS tbl_undo
         USING(row_ts, row_peer)
     LEFT JOIN _synq_undolog AS undo
         ON log.ts = undo.obj_ts AND log.peer = undo.obj_peer
     LEFT JOIN _synq_uniqueness AS fields
-        USING(field)
-    LEFT JOIN _synq_names AS field_data
-        ON field = field_data.id;
+        USING(field);
 
 DROP VIEW IF EXISTS _synq_log_effective;
 CREATE VIEW         _synq_log_effective AS
@@ -193,20 +179,18 @@ WHERE log.ul%2 = 0 AND NOT EXISTS(
 DROP VIEW IF EXISTS _synq_fklog_extra;
 CREATE VIEW         _synq_fklog_extra AS
 SELECT fklog.*,
-    id.tbl, ifnull(undo.ul, 0) AS ul, id.row_ul,
-    fields.tbl_index, field_data.name,
+    ifnull(undo.ul, 0) AS ul, ifnull(tbl_undo.ul, 0) AS row_ul,
+    fields.tbl_index,
     fk.on_update, fk.on_delete, fk.foreign_index
 FROM _synq_fklog AS fklog
-    LEFT JOIN _synq_id_extra AS id
+    LEFT JOIN _synq_id_undo AS tbl_undo
         USING(row_ts, row_peer)
     LEFT JOIN _synq_undolog AS undo
         ON fklog.ts = undo.obj_ts AND fklog.peer = undo.obj_peer
     LEFT JOIN _synq_uniqueness AS fields
         USING(field)
     LEFT JOIN _synq_fk AS fk
-        USING(field)
-    LEFT JOIN _synq_names AS field_data
-        ON field = field_data.id;
+        USING(field);
 
 DROP VIEW IF EXISTS _synq_fklog_effective;
 CREATE VIEW         _synq_fklog_effective AS
@@ -238,13 +222,27 @@ DROP VIEW IF EXISTS _synq_unified_log_effective;
 CREATE VIEW         _synq_unified_log_effective AS
 SELECT
     log.ts, log.peer, log.row_ts, log.row_peer, log.field, log.tbl_index,
-    log.val AS val_p1, NULL AS val_p2, log.row_ul
+    log.val, NULL AS foreign_row_ts, NULL AS foreign_row_peer, log.row_ul
 FROM _synq_log_effective AS log
 UNION ALL
 SELECT
     fklog.ts, fklog.peer, fklog.row_ts, fklog.row_peer, fklog.field, fklog.tbl_index,
-    fklog.foreign_row_ts AS val_p1, fklog.foreign_row_peer AS val_p2, fklog.row_ul
+    NULL AS val, fklog.foreign_row_ts, fklog.foreign_row_peer, fklog.row_ul
 FROM _synq_fklog_effective AS fklog;
+
+-- Debug-only and test-only tables/views
+
+CREATE TABLE IF NOT EXISTS _synq_names(
+    id integer NOT NULL PRIMARY KEY,
+    name text NOT NULL
+) STRICT;
+
+DROP VIEW IF EXISTS _synq_id_debug;
+CREATE VIEW         _synq_id_debug AS
+SELECT id.row_ts, id.row_peer, id.tbl, tbl.name, undo.ul
+FROM _synq_id AS id
+    LEFT JOIN _synq_id_undo AS undo USING(row_ts, row_peer)
+    LEFT JOIN _synq_names AS tbl ON tbl = id;
 """
 
 
@@ -653,7 +651,10 @@ INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
 SELECT DISTINCT local.ts, local.peer, log.row_ts, log.row_peer, log.row_ul + 1
 FROM _synq_local AS local, _synq_unified_log_effective AS log JOIN _synq_unified_log_effective AS self
         ON log.field = self.field AND log.tbl_index = self.tbl_index AND
-            log.val_p1 = self.val_p1 AND log.val_p2 IS self.val_p2,
+            log.val = self.val OR (
+                log.foreign_row_ts = self.foreign_row_ts AND
+                log.foreign_row_peer = self.foreign_row_peer
+            ),
     _synq_context AS ctx, extern._synq_context AS ectx
 WHERE (
     log.row_ts > self.row_ts OR (

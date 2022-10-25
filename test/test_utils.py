@@ -74,7 +74,11 @@ def crr_from(db: sqlite3.Connection) -> Crr:
             Col(ts=(ts, peer), row=(row_ts, row_peer), name=name, val=val)
             for ts, peer, row_ts, row_peer, name, val in fetch(
                 db,
-                "SELECT ts, peer, row_ts, row_peer, ifnull(name, field), val FROM _synq_log_extra",
+                """
+                SELECT ts, peer, row_ts, row_peer, ifnull(name, field), val
+                FROM _synq_log_extra LEFT JOIN _synq_names
+                    ON field = id
+                """,
             )
         }
         .union(
@@ -87,7 +91,11 @@ def crr_from(db: sqlite3.Connection) -> Crr:
                 )
                 for ts, peer, row_ts, row_peer, name, frow_ts, frow_peer in fetch(
                     db,
-                    "SELECT ts, peer, row_ts, row_peer, ifnull(name, field), foreign_row_ts, foreign_row_peer FROM _synq_fklog_extra",
+                    """
+                    SELECT ts, peer, row_ts, row_peer, ifnull(name, field), foreign_row_ts, foreign_row_peer 
+                    FROM _synq_fklog_extra LEFT JOIN _synq_names
+                        ON field = id
+                    """,
                 )
             }
         )
