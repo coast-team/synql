@@ -410,7 +410,8 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                         WHERE {new_referred_match}
                     )
                 ) AS target
-                WHERE _synq_fklog.ts = local.ts AND _synq_fklog.peer = local.peer;
+                WHERE _synq_fklog.ts = local.ts AND _synq_fklog.peer = local.peer AND
+                    _synq_fklog.field = {ids[(tbl, fk)]};
             """.rstrip()
             fk_insertions += fk_insertion
             triggers += f"""
