@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS _synq_names(
     name text NOT NULL
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS _synq_fields(
+CREATE TABLE IF NOT EXISTS _synq_uniqueness(
     field integer NOT NULL,
     tbl_index integer NOT NULL,
     PRIMARY KEY(field, tbl_index)
@@ -180,7 +180,7 @@ FROM _synq_log AS log
         USING(row_ts, row_peer)
     LEFT JOIN _synq_undolog AS undo
         ON log.ts = undo.obj_ts AND log.peer = undo.obj_peer
-    LEFT JOIN _synq_fields AS fields
+    LEFT JOIN _synq_uniqueness AS fields
         USING(field)
     LEFT JOIN _synq_names AS field_data
         ON field = field_data.id;
@@ -205,7 +205,7 @@ FROM _synq_fklog AS fklog
         USING(row_ts, row_peer)
     LEFT JOIN _synq_undolog AS undo
         ON fklog.ts = undo.obj_ts AND fklog.peer = undo.obj_peer
-    LEFT JOIN _synq_fields AS fields
+    LEFT JOIN _synq_uniqueness AS fields
         USING(field)
     LEFT JOIN _synq_fk AS fk
         USING(field)
@@ -330,7 +330,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
             for uniq in tbl_uniqueness:
                 if col.name in uniq.columns():
                     metadata += f"""
-                    INSERT OR REPLACE INTO _synq_fields(field, tbl_index)
+                    INSERT OR REPLACE INTO _synq_uniqueness(field, tbl_index)
                     VALUES({ids[(tbl, col)]}, {ids[(tbl, uniq)]});
                     """.rstrip()
             insertions += f"""
@@ -352,7 +352,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
             for uniq in tbl_uniqueness:
                 if any(col_name in uniq.columns() for col_name in fk.columns):
                     metadata += f"""
-                    INSERT OR REPLACE INTO _synq_fields(field, tbl_index)
+                    INSERT OR REPLACE INTO _synq_uniqueness(field, tbl_index)
                     VALUES({ids[(tbl, fk)]}, {ids[(tbl, uniq)]});
                     """.rstrip()
             foreign_tbl_name = fk.foreign_table.name[0]
@@ -384,7 +384,6 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 {FK_ACTION[normalize_fk_action(fk.on_update, conf)]}
             );
             """
-            coma_fk_cols = ", ".join(f'"{col}"' for col in fk.columns)
             fk_ins_up = f"""
                 UPDATE _synq_fklog SET
                     foreign_row_ts = target.row_ts,
@@ -399,7 +398,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 WHERE _synq_fklog.ts = local.ts AND _synq_fklog.peer = local.peer AND
                     _synq_fklog.field = {ids[(tbl, fk)]};
             """.strip()
-            fk_insertion = f"""
+            insertions += f"""
                 -- handle case where at least one col is NULL
                 INSERT INTO _synq_fklog(ts, peer, row_ts, row_peer, field)
                 SELECT
@@ -409,7 +408,6 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 ) AS cur;
                 {fk_ins_up}
             """.rstrip()
-            insertions += fk_insertion
             updates += f"""
                 -- handle case where at least one col is NULL
                 INSERT INTO _synq_fklog(ts, peer, row_ts, row_peer, field)
@@ -467,7 +465,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 UPDATE "_synq_id_{tbl_name}" SET rowid = NEW."{rowid_aliases[0]}"
                 WHERE rowid = OLD."{rowid_aliases[0]}";
             END;
-            """
+            """.rstrip()
         result += metadata + textwrap.dedent(table_synq_id) + textwrap.dedent(triggers)
     return result.strip()
 
@@ -671,7 +669,7 @@ WHERE (
 )
 GROUP BY log.row_ts, log.row_peer, self.row_ts, self.row_peer, log.tbl_index
 HAVING count(*) >= (
-    SELECT count(DISTINCT field) FROM _synq_fields WHERE tbl_index = log.tbl_index
+    SELECT count(DISTINCT field) FROM _synq_uniqueness WHERE tbl_index = log.tbl_index
 );
 
 -- D. ON DELETE CASCADE
