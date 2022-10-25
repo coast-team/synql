@@ -212,18 +212,6 @@ BEGIN
     FROM _synq_local AS local;
 END;
 
-DROP VIEW IF EXISTS _synq_unified_log_effective;
-CREATE VIEW         _synq_unified_log_effective AS
-SELECT
-    log.ts, log.peer, log.row_ts, log.row_peer, log.field,
-    log.val, NULL AS foreign_row_ts, NULL AS foreign_row_peer, log.row_ul
-FROM _synq_log_effective AS log
-UNION ALL
-SELECT
-    fklog.ts, fklog.peer, fklog.row_ts, fklog.row_peer, fklog.field,
-    NULL AS val, fklog.foreign_row_ts, fklog.foreign_row_peer, fklog.row_ul
-FROM _synq_fklog_effective AS fklog;
-
 -- Debug-only and test-only tables/views
 
 CREATE TABLE IF NOT EXISTS _synq_names(
@@ -575,17 +563,17 @@ WHERE ul < excluded.ul;
 _CONFLICT_RESOLUTION = f"""
 -- A. ON DELETE RESTRICT
 INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
-WITH RECURSIVE restrict_refs(foreign_row_ts, foreign_row_peer) AS (
+WITH RECURSIVE _synq_restrict_refs(foreign_row_ts, foreign_row_peer) AS (
     SELECT foreign_row_ts, foreign_row_peer
     FROM _synq_fklog_effective
     WHERE on_delete = 1 AND row_ul%2 = 0
     UNION
     SELECT target.foreign_row_ts, target.foreign_row_peer
-    FROM restrict_refs AS src JOIN _synq_fklog_effective AS target
+    FROM _synq_restrict_refs AS src JOIN _synq_fklog_effective AS target
         ON src.foreign_row_ts = target.row_ts AND src.foreign_row_peer = target.row_peer
 )
 SELECT local.ts, local.peer, row_ts, row_peer, ul + 1
-FROM _synq_local AS local, restrict_refs JOIN _synq_id_undo
+FROM _synq_local AS local, _synq_restrict_refs JOIN _synq_id_undo
     ON foreign_row_ts = row_ts AND foreign_row_peer = row_peer
 WHERE ul%2 = 1;
 
@@ -640,6 +628,17 @@ WHERE (
 -- C. resolve uniqueness conflicts
 -- undo latest rows with conflicting unique keys
 INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
+WITH _synq_unified_log_effective AS (
+    SELECT
+    log.ts, log.peer, log.row_ts, log.row_peer, log.field,
+    log.val, NULL AS foreign_row_ts, NULL AS foreign_row_peer, log.row_ul
+    FROM _synq_log_effective AS log
+    UNION ALL
+    SELECT
+        fklog.ts, fklog.peer, fklog.row_ts, fklog.row_peer, fklog.field,
+        NULL AS val, fklog.foreign_row_ts, fklog.foreign_row_peer, fklog.row_ul
+    FROM _synq_fklog_effective AS fklog
+)
 SELECT DISTINCT local.ts, local.peer, log.row_ts, log.row_peer, log.row_ul + 1
 FROM _synq_local AS local, _synq_unified_log_effective AS log JOIN _synq_unified_log_effective AS self
         ON log.field = self.field AND (
@@ -664,19 +663,19 @@ HAVING count(*) >= (
 
 -- D. ON DELETE CASCADE
 INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
-WITH RECURSIVE dangling_refs(row_ts, row_peer, row_ul) AS (
+WITH RECURSIVE _synq_dangling_refs(row_ts, row_peer, row_ul) AS (
     SELECT fklog.row_ts, fklog.row_peer, fklog.row_ul
     FROM _synq_fklog_effective AS fklog JOIN _synq_id_undo AS undo
         ON fklog.foreign_row_ts = undo.row_ts AND fklog.foreign_row_peer = undo.row_peer
     WHERE fklog.on_delete <> 2 AND fklog.row_ul%2 = 0 AND undo.ul%2 = 1
     UNION
     SELECT src.row_ts, src.row_peer, src.row_ul
-    FROM dangling_refs AS target JOIN _synq_fklog_effective AS src
+    FROM _synq_dangling_refs AS target JOIN _synq_fklog_effective AS src
         ON src.foreign_row_ts = target.row_ts AND src.foreign_row_peer = target.row_peer
     WHERE src.row_ul%2 = 0
 )
 SELECT local.ts, local.peer, row_ts, row_peer, row_ul+1
-FROM _synq_local AS local, dangling_refs
+FROM _synq_local AS local, _synq_dangling_refs
 WHERE row_ul%2 = 0;
 
 -- E. ON DELETE SET NULL
