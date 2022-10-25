@@ -121,7 +121,6 @@ CREATE TABLE IF NOT EXISTS _synq_uniqueness(
 
 CREATE TABLE IF NOT EXISTS _synq_fk(
     field integer NOT NULL PRIMARY KEY,
-    -- ON DELETE/UPDATE action info
     -- 0: CASCADE, 1: RESTRICT, 2: SET NULL
     on_delete integer NOT NULL CHECK(0 <= on_delete AND on_delete <= 2),
     on_update integer NOT NULL CHECK(0 <= on_update AND on_update <= 2),
@@ -135,9 +134,6 @@ CREATE TABLE IF NOT EXISTS _synq_log(
     row_peer integer NOT NULL,
     field integer NOT NULL,
     val any,
-    -- index id (for unique keys)
-    -- column of a composite key have the same index id
-    -- WARNING: interleaved indexes are not supported
     PRIMARY KEY(row_ts, row_peer, field, ts, peer),
     FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
         ON DELETE CASCADE ON UPDATE CASCADE
