@@ -157,15 +157,12 @@ CREATE INDEX IF NOT EXISTS _synq_undolog_ts ON _synq_undolog(peer, ts);
 DROP VIEW IF EXISTS _synq_log_extra;
 CREATE VIEW         _synq_log_extra AS
 SELECT log.*,
-    ifnull(undo.ul, 0) AS ul, ifnull(tbl_undo.ul, 0) AS row_ul,
-    fields.tbl_index
+    ifnull(undo.ul, 0) AS ul, ifnull(tbl_undo.ul, 0) AS row_ul
 FROM _synq_log AS log
     LEFT JOIN _synq_id_undo AS tbl_undo
         USING(row_ts, row_peer)
     LEFT JOIN _synq_undolog AS undo
-        ON log.ts = undo.obj_ts AND log.peer = undo.obj_peer
-    LEFT JOIN _synq_uniqueness AS fields
-        USING(field);
+        ON log.ts = undo.obj_ts AND log.peer = undo.obj_peer;
 
 DROP VIEW IF EXISTS _synq_log_effective;
 CREATE VIEW         _synq_log_effective AS
@@ -180,15 +177,12 @@ DROP VIEW IF EXISTS _synq_fklog_extra;
 CREATE VIEW         _synq_fklog_extra AS
 SELECT fklog.*,
     ifnull(undo.ul, 0) AS ul, ifnull(tbl_undo.ul, 0) AS row_ul,
-    fields.tbl_index,
     fk.on_update, fk.on_delete, fk.foreign_index
 FROM _synq_fklog AS fklog
     LEFT JOIN _synq_id_undo AS tbl_undo
         USING(row_ts, row_peer)
     LEFT JOIN _synq_undolog AS undo
         ON fklog.ts = undo.obj_ts AND fklog.peer = undo.obj_peer
-    LEFT JOIN _synq_uniqueness AS fields
-        USING(field)
     LEFT JOIN _synq_fk AS fk
         USING(field);
 
@@ -221,12 +215,12 @@ END;
 DROP VIEW IF EXISTS _synq_unified_log_effective;
 CREATE VIEW         _synq_unified_log_effective AS
 SELECT
-    log.ts, log.peer, log.row_ts, log.row_peer, log.field, log.tbl_index,
+    log.ts, log.peer, log.row_ts, log.row_peer, log.field,
     log.val, NULL AS foreign_row_ts, NULL AS foreign_row_peer, log.row_ul
 FROM _synq_log_effective AS log
 UNION ALL
 SELECT
-    fklog.ts, fklog.peer, fklog.row_ts, fklog.row_peer, fklog.field, fklog.tbl_index,
+    fklog.ts, fklog.peer, fklog.row_ts, fklog.row_peer, fklog.field,
     NULL AS val, fklog.foreign_row_ts, fklog.foreign_row_peer, fklog.row_ul
 FROM _synq_fklog_effective AS fklog;
 
@@ -579,8 +573,6 @@ WHERE ul < excluded.ul;
 """
 
 _CONFLICT_RESOLUTION = f"""
--- Conflict resolution
-
 -- A. ON DELETE RESTRICT
 INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
 WITH RECURSIVE restrict_refs(foreign_row_ts, foreign_row_peer) AS (
@@ -603,14 +595,14 @@ WHERE ul%2 = 1;
 INSERT OR REPLACE INTO _synq_undolog(ts, peer, obj_peer, obj_ts, ul)
 SELECT local.ts, local.peer, log.peer, log.ts, log.ul + 1
 FROM _synq_local AS local, _synq_context AS ctx, extern._synq_context AS ectx,
-    _synq_log_extra AS log, _synq_fklog_effective AS fklog
+    _synq_log_extra AS log JOIN _synq_uniqueness AS uniq USING(field), _synq_fklog_effective AS fklog
 WHERE (
     (log.ts > ctx.ts AND log.peer = ctx.peer AND fklog.ts > ectx.ts AND fklog.peer = ectx.peer) OR
     (log.ts > ectx.ts AND log.peer = ectx.peer AND fklog.ts > ctx.ts AND fklog.peer = ctx.peer)
 ) AND (
     log.row_ts = fklog.foreign_row_ts AND
     log.row_peer = fklog.foreign_row_peer AND
-    log.tbl_index = fklog.foreign_index
+    uniq.tbl_index = fklog.foreign_index
 ) AND fklog.on_update = 1 AND log.ul%2 = 0;
 
 
@@ -621,28 +613,28 @@ INSERT INTO _synq_fklog_effective(
 SELECT
     fklog.row_ts, fklog.row_peer, fklog.field, log.row_ts, log.row_peer
 FROM _synq_context AS ctx, extern._synq_context AS ectx,
-    _synq_log_effective AS log, _synq_fklog_effective AS fklog
+    _synq_log_effective AS log JOIN _synq_uniqueness AS uniq USING(field), _synq_fklog_effective AS fklog
 WHERE (
     (log.ts > ctx.ts AND log.peer = ctx.peer AND fklog.ts > ectx.ts AND fklog.peer = ectx.peer) OR
     (log.ts > ectx.ts AND log.peer = ectx.peer AND fklog.ts > ctx.ts AND fklog.peer = ctx.peer)
 ) AND (
     log.row_ts = fklog.foreign_row_ts AND
     log.row_peer = fklog.foreign_row_peer AND
-    log.tbl_index = fklog.foreign_index
+    uniq.tbl_index = fklog.foreign_index
 ) AND fklog.on_update = 0;
 
 -- B.3.. ON UPDATE SET NULL
 INSERT INTO _synq_fklog_effective(row_ts, row_peer, field)
 SELECT fklog.row_ts, fklog.row_peer, fklog.field
 FROM _synq_context AS ctx, extern._synq_context AS ectx,
-    _synq_log_effective AS log, _synq_fklog_effective AS fklog
+    _synq_log_effective AS log JOIN _synq_uniqueness AS uniq USING(field), _synq_fklog_effective AS fklog
 WHERE (
     (log.ts > ctx.ts AND log.peer = ctx.peer AND fklog.ts > ectx.ts AND fklog.peer = ectx.peer) OR
     (log.ts > ectx.ts AND log.peer = ectx.peer AND fklog.ts > ctx.ts AND fklog.peer = ctx.peer)
 ) AND (
     log.row_ts = fklog.foreign_row_ts AND
     log.row_peer = fklog.foreign_row_peer AND
-    log.tbl_index = fklog.foreign_index
+    uniq.tbl_index = fklog.foreign_index
 ) AND fklog.on_update = 2;
 
 -- C. resolve uniqueness conflicts
@@ -650,12 +642,12 @@ WHERE (
 INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
 SELECT DISTINCT local.ts, local.peer, log.row_ts, log.row_peer, log.row_ul + 1
 FROM _synq_local AS local, _synq_unified_log_effective AS log JOIN _synq_unified_log_effective AS self
-        ON log.field = self.field AND log.tbl_index = self.tbl_index AND (
+        ON log.field = self.field AND (
             log.val = self.val OR (
                 log.foreign_row_ts = self.foreign_row_ts AND
                 log.foreign_row_peer = self.foreign_row_peer
             )
-        ),
+        ) JOIN _synq_uniqueness AS uniq USING(field),
     _synq_context AS ctx, extern._synq_context AS ectx
 WHERE (
     log.row_ts > self.row_ts OR (
@@ -665,9 +657,9 @@ WHERE (
     (log.ts > ctx.ts AND log.peer = ctx.peer AND self.ts > ectx.ts AND self.peer = ectx.peer) OR
     (log.ts > ectx.ts AND log.peer = ectx.peer AND self.ts > ctx.ts AND self.peer = ctx.peer)
 )
-GROUP BY log.row_ts, log.row_peer, self.row_ts, self.row_peer, log.tbl_index
+GROUP BY log.row_ts, log.row_peer, self.row_ts, self.row_peer, uniq.tbl_index
 HAVING count(*) >= (
-    SELECT count(DISTINCT field) FROM _synq_uniqueness WHERE tbl_index = log.tbl_index
+    SELECT count(DISTINCT field) FROM _synq_uniqueness WHERE tbl_index = uniq.tbl_index
 );
 
 -- D. ON DELETE CASCADE
