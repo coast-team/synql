@@ -90,19 +90,19 @@ def test_aliased_rowid(tmp_path: pathlib.Path) -> None:
 def test_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(v any)")
+        exec(a, "CREATE TABLE X(x integer PRIMARY KEY AUTOINCREMENT, v text)")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
 
-        exec(a, "INSERT INTO X VALUES('v1')")
+        exec(a, "INSERT INTO X(v) VALUES('v1')")
         assert crr_from(a) == Crr(
-            tbls={"X": {("v1", (1, 1))}},
+            tbls={"X": {(1, "v1", (1, 1))}},
             ctx={1: 1},
             log={Col(ts=(1, 1), row=(1, 1), name="v", val="v1")},
         )
 
         exec(a, "UPDATE X SET v = 'v2'")
         assert crr_from(a) == Crr(
-            tbls={"X": {("v2", (1, 1))}},
+            tbls={"X": {(1, "v2", (1, 1))}},
             ctx={1: 2},
             log={
                 Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
@@ -115,23 +115,23 @@ def test_repl_col(tmp_path: pathlib.Path) -> None:
 def test_repl_pk(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(v any PRIMARY KEY)")
+        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
 
-        exec(a, "INSERT INTO X VALUES('v1')")
+        exec(a, "INSERT INTO X VALUES(1)")
         assert crr_from(a) == Crr(
-            tbls={"X": {("v1", (1, 1))}},
+            tbls={"X": {(1, (1, 1))}},
             ctx={1: 1},
-            log={Col(ts=(1, 1), row=(1, 1), name="v", val="v1")},
+            log={Col(ts=(1, 1), row=(1, 1), name="x", val=1)},
         )
 
-        exec(a, "INSERT INTO X VALUES('v1') ON CONFLICT(v) DO UPDATE SET v = 'v2'")
+        exec(a, "INSERT INTO X VALUES(1) ON CONFLICT(x) DO UPDATE SET x = 2")
         assert crr_from(a) == Crr(
-            tbls={"X": {("v2", (1, 1))}},
+            tbls={"X": {(2, (1, 1))}},
             ctx={1: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
-                Col(ts=(2, 1), row=(1, 1), name="v", val="v2"),
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -174,7 +174,7 @@ def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
 def test_fk_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
+        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
         exec(
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x))",
@@ -275,7 +275,7 @@ def test_fk_repl_multi_col(tmp_path: pathlib.Path) -> None:
 def test_fk_up_cascade(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
+        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
         exec(
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE CASCADE)",
@@ -301,7 +301,7 @@ def test_fk_up_cascade(tmp_path: pathlib.Path) -> None:
 def test_fk_up_set_null(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
+        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
         exec(
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE SET NULL)",
@@ -387,14 +387,14 @@ def test_pull_repl_col(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(v any)")
+        exec(a, "CREATE TABLE X(x integer PRIMARY KEY AUTOINCREMENT, v text)")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
 
-        exec(a, "INSERT INTO X VALUES('v1')")
+        exec(a, "INSERT INTO X(v) VALUES('v1')")
         crr.pull_from(b, tmp_path / "a.db")
         assert crr_from(b) == Crr(
-            tbls={"X": {("v1", (1, 1))}},
+            tbls={"X": {(1, "v1", (1, 1))}},
             ctx={1: 1, 2: 0},
             log={Col(ts=(1, 1), row=(1, 1), name="v", val="v1")},
         )
@@ -402,7 +402,7 @@ def test_pull_repl_col(tmp_path: pathlib.Path) -> None:
         exec(a, "UPDATE X SET v = 'v2'")
         crr.pull_from(b, tmp_path / "a.db")
         assert crr_from(b) == Crr(
-            tbls={"X": {("v2", (1, 1))}},
+            tbls={"X": {(1, "v2", (1, 1))}},
             ctx={1: 2, 2: 0},
             log={
                 Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
@@ -500,7 +500,7 @@ def test_concur_ins_repl_col(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(v any);")
+        exec(a, "CREATE TABLE X(v text PRIMARY KEY);")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
         exec(a, "INSERT INTO X VALUES('a1')")
@@ -548,7 +548,7 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(v any PRIMARY KEY);")
+        exec(a, "CREATE TABLE X(v text PRIMARY KEY);")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
         exec(a, "INSERT INTO X VALUES('v1')")
@@ -584,16 +584,16 @@ def test_unique_nulls(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(v any UNIQUE);")
+        exec(a, "CREATE TABLE X(x integer PRIMARY KEY AUTOINCREMENT, v int UNIQUE);")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
-        exec(a, "INSERT INTO X VALUES(NULL)")
-        exec(b, "INSERT INTO X VALUES(NULL)")
+        exec(a, "INSERT INTO X(v) VALUES(NULL)")
+        exec(b, "INSERT INTO X(v) VALUES(NULL)")
         b.backup(b_bak)
 
         crr.pull_from(b, tmp_path / "a.db")
         assert crr_from(b) == Crr(
-            tbls={"X": {(None, (1, 1)), (None, (1, 2))}},
+            tbls={"X": {(2, None, (1, 1)), (1, None, (1, 2))}},
             ctx={1: 1, 2: 1},
             log={
                 Col(ts=(1, 1), row=(1, 1), name="v", val=None),
@@ -603,7 +603,7 @@ def test_unique_nulls(tmp_path: pathlib.Path) -> None:
 
         crr.pull_from(a, tmp_path / "b.bak.db")
         assert crr_from(a) == Crr(
-            tbls={"X": {(None, (1, 1)), (None, (1, 2))}},
+            tbls={"X": {(1, None, (1, 1)), (2, None, (1, 2))}},
             ctx={1: 1, 2: 1},
             log={
                 Col(ts=(1, 1), row=(1, 1), name="v", val=None),
@@ -618,7 +618,7 @@ def test_multi_col_conflicting_keys(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(a integer, b integer, UNIQUE(a, b));")
+        exec(a, "CREATE TABLE X(a integer, b integer, PRIMARY KEY(a, b));")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
         exec(a, "INSERT INTO X VALUES(1, 2)")
@@ -668,7 +668,7 @@ def test_multi_col_multi_covering_unique(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(a int, b int, c int, UNIQUE(a,b), UNIQUE(b,c));")
+        exec(a, "CREATE TABLE X(a int, b int, c int, PRIMARY KEY(a,b), UNIQUE(b,c));")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
         exec(a, "INSERT INTO X VALUES(1, 2, 3)")
@@ -710,8 +710,8 @@ def test_conflicting_unique_fk(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x any PRIMARY KEY);")
-        exec(a, "CREATE TABLE Y(x any CONSTRAINT fk REFERENCES X(x) UNIQUE);")
+        exec(a, "CREATE TABLE X(x int PRIMARY KEY);")
+        exec(a, "CREATE TABLE Y(x int CONSTRAINT fk REFERENCES X(x) PRIMARY KEY);")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
         crr.clone_to(a, b, id=2)
@@ -750,10 +750,10 @@ def test_multi_col_fk_multi_covering_unique(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x any PRIMARY KEY);")
+        exec(a, "CREATE TABLE X(x int PRIMARY KEY);")
         exec(
             a,
-            "CREATE TABLE Y(y any PRIMARY KEY, x any CONSTRAINT fk REFERENCES X(x), UNIQUE(y, x));",
+            "CREATE TABLE Y(y int PRIMARY KEY, x int CONSTRAINT fk REFERENCES X(x), UNIQUE(y, x));",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -802,7 +802,7 @@ def test_past_conflicting_keys(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(v any PRIMARY KEY);")
+        exec(a, "CREATE TABLE X(v text PRIMARY KEY);")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
         exec(a, "INSERT INTO X VALUES('v1')")
@@ -839,7 +839,7 @@ def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(u any PRIMARY KEY, v any UNIQUE);")
+        exec(a, "CREATE TABLE X(u text PRIMARY KEY, v text UNIQUE);")
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         crr.clone_to(a, b, id=2)
         exec(a, "INSERT INTO X VALUES('u1', 'v1')")
@@ -968,7 +968,7 @@ def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
+        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
         exec(
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT)",
@@ -1137,7 +1137,7 @@ def test_concur_up_fk_restrict(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
+        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
         exec(
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE RESTRICT)",
@@ -1180,7 +1180,7 @@ def test_concur_up2_fk_restrict(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
+        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
         exec(
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE RESTRICT)",
@@ -1228,7 +1228,7 @@ def test_concur_up_fk_cascade(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
+        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
         exec(
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE CASCADE)",
@@ -1271,7 +1271,7 @@ def test_concur_up_fk_set_null(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
+        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
         exec(
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE SET NULL)",
@@ -1314,10 +1314,10 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x any PRIMARY KEY)")
+        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(x integer CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT ON UPDATE CASCADE)",
+            "CREATE TABLE Y(x int PRIMARY KEY CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT ON UPDATE CASCADE)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -1363,10 +1363,10 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
 def test_spaced_names(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
         exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, 'CREATE TABLE "X "("x " any PRIMARY KEY)')
+        exec(a, 'CREATE TABLE "X "("x " int PRIMARY KEY)')
         exec(
             a,
-            'CREATE TABLE "Y "("x " integer CONSTRAINT fk REFERENCES "X "("x "))',
+            'CREATE TABLE "Y "("x " int PRIMARY KEY CONSTRAINT fk REFERENCES "X "("x "))',
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, 'INSERT INTO "X " VALUES(1)')
