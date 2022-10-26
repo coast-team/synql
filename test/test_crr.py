@@ -458,6 +458,43 @@ def test_pull_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
         exec(a, "PRAGMA integrity_check")
 
 
+def test_pull_fk_fk(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b:
+        exec(a, "PRAGMA foreign_keys=ON")
+        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
+        exec(a, "CREATE TABLE Y(y integer PRIMARY KEY CONSTRAINT fk1 REFERENCES X)")
+        exec(a, "CREATE TABLE Z(z integer PRIMARY KEY CONSTRAINT fk2 REFERENCES Y)")
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, id=2)
+
+        exec(a, "INSERT INTO X VALUES(1)")
+        exec(a, "INSERT INTO Y VALUES(1)")
+        exec(a, "INSERT INTO Z VALUES(1)")
+        crr.pull_from(b, tmp_path / "a.db")
+        assert crr_from(b) == Crr(
+            tbls={
+                "X": {
+                    (1, (1, 1)),
+                },
+                "Y": {
+                    (1, (2, 1)),
+                },
+                "Z": {
+                    (1, (3, 1)),
+                },
+            },
+            ctx={1: 3, 2: 0},
+            log={
+                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Ref(ts=(2, 1), row=(2, 1), name="fk1", target=(1, 1)),
+                Ref(ts=(3, 1), row=(3, 1), name="fk2", target=(2, 1)),
+            },
+        )
+        exec(a, "PRAGMA integrity_check")
+
+
 def test_concur_ins_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
@@ -1355,6 +1392,109 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(4, 2), obj=(1, 1), ul=2),
                 Ref(ts=(5, 2), row=(2, 2), name="fk", target=(1, 1)),
                 Undo(ts=(5, 2), obj=(3, 2), ul=1),
+            },
+        )
+        exec(a, "PRAGMA integrity_check")
+
+
+def test_concur_complex_2(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
+        exec(a, "PRAGMA foreign_keys=ON")
+        exec(a, "CREATE TABLE book(id integer PRIMARY KEY AUTOINCREMENT, name text)")
+        exec(
+            a, "CREATE TABLE publisher(id integer PRIMARY KEY AUTOINCREMENT, name text)"
+        )
+        exec(a, "CREATE TABLE store(id integer PRIMARY KEY AUTOINCREMENT, name text)")
+        exec(
+            a,
+            """CREATE TABLE published_book(
+                book_id integer CONSTRAINT book_fk REFERENCES book,
+                publisher_id integer CONSTRAINT publisher_fk REFERENCES publisher,
+                PRIMARY KEY(book_id, publisher_id)
+            )""",
+        )
+        exec(
+            a,
+            """CREATE TABLE availability(
+                book_id integer,
+                publisher_id integer,
+                store_id integer CONSTRAINT store_fk REFERENCES store,
+                count integer,
+                PRIMARY KEY(book_id, publisher_id, store_id),
+                CONSTRAINT published_book_fk FOREIGN KEY(book_id, publisher_id) REFERENCES published_book
+            )""",
+        )
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        exec(a, "INSERT INTO book(name) VALUES ('B1'), ('B2')")
+        exec(a, "INSERT INTO publisher(name) VALUES ('P1'), ('P2')")
+        crr.clone_to(a, b, id=2)
+        exec(a, "INSERT INTO store(name) VALUES('S1')")
+        exec(a, "INSERT INTO published_book VALUES(1, 1)")
+        exec(a, "INSERT INTO availability VALUES(1, 1, 1, 4)")
+        a.backup(a_bak)
+        exec(b, "INSERT INTO store(name) VALUES('S2')")
+        exec(b, "INSERT INTO published_book VALUES(1, 2)")
+        exec(b, "INSERT INTO availability VALUES(1, 2, 1, 5)")
+
+        crr.pull_from(a, tmp_path / "b.db")
+        assert crr_from(a) == Crr(
+            tbls={
+                "book": {(1, "B1", (1, 1)), (2, "B2", (2, 1))},
+                "publisher": {(1, "P1", (3, 1)), (2, "P2", (4, 1))},
+                "store": {(1, "S1", (5, 1)), (2, "S2", (5, 2))},
+                "published_book": {(1, 1, (6, 1)), (1, 2, (6, 2))},
+                "availability": {(1, 1, 1, 4, (7, 1)), (1, 2, 2, 5, (7, 2))},
+            },
+            ctx={1: 7, 2: 7},
+            log={
+                Col(ts=(1, 1), row=(1, 1), name="name", val="B1"),
+                Col(ts=(2, 1), row=(2, 1), name="name", val="B2"),
+                Col(ts=(3, 1), row=(3, 1), name="name", val="P1"),
+                Col(ts=(4, 1), row=(4, 1), name="name", val="P2"),
+                Col(ts=(5, 1), row=(5, 1), name="name", val="S1"),
+                Col(ts=(5, 2), row=(5, 2), name="name", val="S2"),
+                Ref(ts=(6, 1), row=(6, 1), name="book_fk", target=(1, 1)),
+                Ref(ts=(6, 1), row=(6, 1), name="publisher_fk", target=(3, 1)),
+                Ref(ts=(6, 2), row=(6, 2), name="book_fk", target=(1, 1)),
+                Ref(ts=(6, 2), row=(6, 2), name="publisher_fk", target=(4, 1)),
+                Ref(ts=(7, 1), row=(7, 1), name="published_book_fk", target=(6, 1)),
+                Ref(ts=(7, 1), row=(7, 1), name="store_fk", target=(5, 1)),
+                Col(ts=(7, 1), row=(7, 1), name="count", val=4),
+                Ref(ts=(7, 2), row=(7, 2), name="published_book_fk", target=(6, 2)),
+                Ref(ts=(7, 2), row=(7, 2), name="store_fk", target=(5, 2)),
+                Col(ts=(7, 2), row=(7, 2), name="count", val=5),
+            },
+        )
+
+        crr.pull_from(b, tmp_path / "a.bak.db")
+        assert crr_from(b) == Crr(
+            tbls={
+                "book": {(1, "B1", (1, 1)), (2, "B2", (2, 1))},
+                "publisher": {(1, "P1", (3, 1)), (2, "P2", (4, 1))},
+                "store": {(2, "S1", (5, 1)), (1, "S2", (5, 2))},
+                "published_book": {(1, 1, (6, 1)), (1, 2, (6, 2))},
+                "availability": {(1, 1, 2, 4, (7, 1)), (1, 2, 1, 5, (7, 2))},
+            },
+            ctx={1: 7, 2: 7},
+            log={
+                Col(ts=(1, 1), row=(1, 1), name="name", val="B1"),
+                Col(ts=(2, 1), row=(2, 1), name="name", val="B2"),
+                Col(ts=(3, 1), row=(3, 1), name="name", val="P1"),
+                Col(ts=(4, 1), row=(4, 1), name="name", val="P2"),
+                Col(ts=(5, 1), row=(5, 1), name="name", val="S1"),
+                Col(ts=(5, 2), row=(5, 2), name="name", val="S2"),
+                Ref(ts=(6, 1), row=(6, 1), name="book_fk", target=(1, 1)),
+                Ref(ts=(6, 1), row=(6, 1), name="publisher_fk", target=(3, 1)),
+                Ref(ts=(6, 2), row=(6, 2), name="book_fk", target=(1, 1)),
+                Ref(ts=(6, 2), row=(6, 2), name="publisher_fk", target=(4, 1)),
+                Ref(ts=(7, 1), row=(7, 1), name="published_book_fk", target=(6, 1)),
+                Ref(ts=(7, 1), row=(7, 1), name="store_fk", target=(5, 1)),
+                Col(ts=(7, 1), row=(7, 1), name="count", val=4),
+                Ref(ts=(7, 2), row=(7, 2), name="published_book_fk", target=(6, 2)),
+                Ref(ts=(7, 2), row=(7, 2), name="store_fk", target=(5, 2)),
+                Col(ts=(7, 2), row=(7, 2), name="count", val=5),
             },
         )
         exec(a, "PRAGMA integrity_check")
