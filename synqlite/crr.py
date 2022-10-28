@@ -36,9 +36,8 @@ def normalize_fk_action(
         else:
             return sql.OnUpdateDelete.RESTRICT
     elif action is sql.OnUpdateDelete.SET_DEFAULT:
-        raise Exception("SybQLite does not support On DELETE/UPDATE SET DEFAULT")
-    else:
-        return action
+        raise Exception("SynQLite does not support On DELETE/UPDATE SET DEFAULT")
+    return action
 
 
 _SELECT_AR_TABLE_SCHEMA = """--sql
@@ -48,7 +47,7 @@ SELECT sql FROM sqlite_master WHERE type = 'table' AND
 
 _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS _synq_local(
-    rowid integer PRIMARY KEY DEFAULT 1 CHECK(rowid = 1),
+    id integer PRIMARY KEY DEFAULT 1 CHECK(id = 1),
     peer integer NOT NULL DEFAULT 0,
     ts integer NOT NULL DEFAULT 0 CHECK(ts >= 0),
     is_merging integer NOT NULL DEFAULT 0 CHECK(is_merging & 1 = is_merging)
@@ -63,16 +62,8 @@ BEGIN
     UPDATE _synq_local SET ts = max(NEW.ts, CAST(
         ((julianday('now') - julianday('1970-01-01')) * 86400.0 * 1000000.0) AS int
             -- unix epoch in nano-seconds
-            -- support 5 centuries with 64bits epochs
             -- https://www.sqlite.org/lang_datefunc.html#examples
     ));
-END;
-
-DROP TRIGGER IF EXISTS  _synq_local_context_update;
-CREATE TRIGGER          _synq_local_context_update
-AFTER UPDATE OF ts ON _synq_local WHEN (NOT NEW.is_merging)
-BEGIN
-	UPDATE _synq_context SET ts = NEW.ts WHERE _synq_context.peer = NEW.peer;
 END;
 
 -- Causal context
@@ -108,10 +99,10 @@ CREATE TABLE IF NOT EXISTS _synq_uniqueness(
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS _synq_fk(
-    field integer NOT NULL PRIMARY KEY,
+    field integer PRIMARY KEY,
     -- 0: CASCADE, 1: RESTRICT, 2: SET NULL
-    on_delete integer NOT NULL CHECK(0 <= on_delete AND on_delete <= 2),
-    on_update integer NOT NULL CHECK(0 <= on_update AND on_update <= 2),
+    on_delete integer NOT NULL CHECK(on_delete BETWEEN 0 AND 2),
+    on_update integer NOT NULL CHECK(on_update BETWEEN 0 AND 2),
     foreign_index integer NOT NULL
 ) STRICT;
 
@@ -156,8 +147,7 @@ CREATE INDEX IF NOT EXISTS _synq_undolog_ts ON _synq_undolog(peer, ts);
 
 DROP VIEW IF EXISTS _synq_log_extra;
 CREATE VIEW         _synq_log_extra AS
-SELECT log.*,
-    ifnull(undo.ul, 0) AS ul, ifnull(tbl_undo.ul, 0) AS row_ul
+SELECT log.*, ifnull(undo.ul, 0) AS ul, ifnull(tbl_undo.ul, 0) AS row_ul
 FROM _synq_log AS log
     LEFT JOIN _synq_id_undo AS tbl_undo
         USING(row_ts, row_peer)
@@ -175,8 +165,7 @@ WHERE log.ul%2 = 0 AND NOT EXISTS(
 
 DROP VIEW IF EXISTS _synq_fklog_extra;
 CREATE VIEW         _synq_fklog_extra AS
-SELECT fklog.*,
-    ifnull(undo.ul, 0) AS ul, ifnull(tbl_undo.ul, 0) AS row_ul,
+SELECT fklog.*, ifnull(undo.ul, 0) AS ul, ifnull(tbl_undo.ul, 0) AS row_ul,
     fk.on_update, fk.on_delete, fk.foreign_index
 FROM _synq_fklog AS fklog
     LEFT JOIN _synq_id_undo AS tbl_undo
@@ -215,7 +204,7 @@ END;
 -- Debug-only and test-only tables/views
 
 CREATE TABLE IF NOT EXISTS _synq_names(
-    id integer NOT NULL PRIMARY KEY,
+    id integer PRIMARY KEY,
     name text NOT NULL
 ) STRICT;
 
@@ -282,6 +271,8 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
         WHEN (SELECT NOT is_merging FROM _synq_local)
         BEGIN
             UPDATE _synq_local SET ts = ts + 1;
+            UPDATE _synq_context SET ts = _synq_local.ts
+            FROM _synq_local WHERE _synq_context.peer = _synq_local.peer;
 
             INSERT INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
             SELECT local.ts, local.peer, OLD.row_ts, OLD.row_peer, 1
@@ -370,7 +361,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                     _synq_fklog.field = {ids[(tbl, fk)]};
             """.strip()
             insertions += f"""
-                -- handle case where at least one col is NULL
+                -- Handle case where at least one col is NULL
                 INSERT INTO _synq_fklog(ts, peer, row_ts, row_peer, field)
                 SELECT
                     local.ts, local.peer, cur.row_ts, cur.row_peer, {ids[(tbl, fk)]}
@@ -380,7 +371,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 {fk_ins_up}
             """.rstrip()
             updates += f"""
-                -- handle case where at least one col is NULL
+                -- Handle case where at least one col is NULL
                 INSERT INTO _synq_fklog(ts, peer, row_ts, row_peer, field)
                 SELECT
                     local.ts, local.peer, cur.row_ts, cur.row_peer, {ids[(tbl, fk)]}
@@ -396,13 +387,14 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
         AFTER INSERT ON "{tbl_name}"
         WHEN (SELECT NOT is_merging FROM _synq_local)
         BEGIN
-            -- handle INSERT OR REPLACE (DELETE if exists, then INSERT)
-            -- The delete trigger is not fired whether recursive triggers
-            -- are not enabled.
-            -- To ensure that the prexisting row is deleted, we attempt a deletion.
+            -- Handle INSERT OR REPLACE
+            -- Delete trigger is not fired when recursive triggers are disabled.
+            -- To ensure that the pre-existing row is deleted, we attempt a deletion.
             DELETE FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid;
 
-            UPDATE _synq_local SET ts = ts + 1; -- triggers clock update
+            UPDATE _synq_local SET ts = ts + 1;
+            UPDATE _synq_context SET ts = _synq_local.ts
+            FROM _synq_local WHERE _synq_context.peer = _synq_local.peer;
 
             INSERT INTO "_synq_id_{tbl_name}"(rowid, row_ts, row_peer)
             SELECT NEW.rowid, ts, peer FROM _synq_local;
@@ -422,7 +414,9 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
             AFTER UPDATE OF {','.join(tracked_cols)} ON "{tbl_name}"
             WHEN (SELECT NOT is_merging FROM _synq_local)
             BEGIN
-                UPDATE _synq_local SET ts = ts + 1; -- triggers clock update
+                UPDATE _synq_local SET ts = ts + 1;
+                UPDATE _synq_context SET ts = _synq_local.ts
+                FROM _synq_local WHERE _synq_context.peer = _synq_local.peer;
                 {updates}
             END;
             """.rstrip()
