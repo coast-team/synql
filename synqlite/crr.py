@@ -221,7 +221,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
     ids = utils.ids(tables)
     for (tbl_name, tbl) in tables.items():
         tbl_uniqueness = list(tbl.uniqueness())
-        replicated_cols = utils.replicated_columns(tbl)
+        replicated_cols = tuple(utils.replicated_columns(tbl))
         # we use a dot (peer, ts) to globally and uniquely identify an object.
         # An object is either a row or a log entry.
         # _synq_id_{tbl} contains a mapping between rows (rowid) and their id (dot)
@@ -312,12 +312,12 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                     INSERT INTO _synq_uniqueness(field, tbl_index)
                     VALUES({ids[(tbl, fk)]}, {ids[(tbl, uniq)]});
                     """.rstrip()
-            foreign_tbl_name = fk.foreign_table.name[0]
+            foreign_tbl_name = fk.foreign_table[0]
             foreign_tbl = tables[foreign_tbl_name]
             changed_values = " OR ".join(
                 f'OLD."{col_name}" IS NOT NEW."{col_name}"' for col_name in fk.columns
             )
-            referred_cols = utils.referred_columns(fk, tables)
+            referred_cols = sql.referred_columns(fk, tables)
             f_uniq = next(
                 f_uniq
                 for f_uniq in foreign_tbl.uniqueness()
@@ -703,7 +703,7 @@ def _create_pull(tables: sql.Symbols) -> str:
             ) AS "{col.name}"'''
             ]
         for fk in tbl.foreign_keys():
-            f_tbl = tables[fk.foreign_table.name[0]]
+            f_tbl = tables[fk.foreign_table[0]]
             for col_name in fk.columns:
                 if col_name not in col_names:
                     col_names += [col_name]
@@ -713,43 +713,44 @@ def _create_pull(tables: sql.Symbols) -> str:
                         fklog.row_peer = id.row_peer AND fklog.row_ts = id.row_ts
                     ORDER BY fklog.ts DESC, fklog.peer DESC LIMIT 1
                     """
-                    referred_tbl = tables[fk.foreign_table.name[0]]
-                    referred = utils.fk_col_resolution(fk, col_name, tables).referred
-                    while isinstance(referred, utils.FkResolution):
-                        selector = f"""
-                        SELECT fklog2.* FROM (
-                            {selector}
-                        ) AS fklog LEFT JOIN _synq_fklog_extra AS fklog2
-                            ON fklog2.field = {ids[(referred_tbl, referred.foreign_key)]} AND
-                                fklog2.ul%2 = 0 AND
-                                fklog.foreign_row_peer = fklog2.row_peer AND
-                                fklog.foreign_row_ts = fklog2.row_ts
-                        ORDER BY fklog.ts DESC, fklog.peer DESC LIMIT 1
-                        """
-                        referred_tbl = tables[
-                            referred.foreign_key.foreign_table.name[0]
-                        ]
-                        referred = referred.referred
-                    ref_col = utils.cols(referred_tbl)[referred]
-                    if utils.is_rowid_alias(ref_col, referred_tbl.primary_key()):
-                        selector = f"""
-                        SELECT rw.rowid FROM (
+                    referred_tbl = tables[fk.foreign_table[0]]
+                    for referred in sql.resolve_foreign_key(fk, col_name, tables):
+                        if isinstance(referred, sql.ForeignKey):
+                            selector = f"""
+                            SELECT fklog2.* FROM (
                                 {selector}
-                        ) AS fklog LEFT JOIN "_synq_id_{referred_tbl.name[0]}" AS rw
-                            ON fklog.foreign_row_peer = rw.row_peer AND
-                                fklog.foreign_row_ts = rw.row_ts
-                        """
-                    else:
-                        selector = f"""
-                        SELECT log.val FROM (
-                                {selector}
-                        ) AS fklog LEFT JOIN _synq_log_extra AS log
-                            ON log.row_peer = fklog.foreign_row_peer AND
-                                log.row_ts = fklog.foreign_row_ts AND
-                                log.field = {ids[(referred_tbl, ref_col)]} AND log.ul%2 = 0
-                        ORDER BY log.ts DESC, log.peer DESC LIMIT 1
-                        """
-                    selectors += [f'({selector}) AS "{col_name}"']
+                            ) AS fklog LEFT JOIN _synq_fklog_extra AS fklog2
+                                ON fklog2.field = {ids[(referred_tbl, referred)]} AND
+                                    fklog2.ul%2 = 0 AND
+                                    fklog.foreign_row_peer = fklog2.row_peer AND
+                                    fklog.foreign_row_ts = fklog2.row_ts
+                            ORDER BY fklog.ts DESC, fklog.peer DESC LIMIT 1
+                            """
+                            referred_tbl = tables[referred.foreign_table[0]]
+                        else:
+                            ref_col = referred_tbl.column(referred)
+                            assert ref_col is not None
+                            if utils.is_rowid_alias(
+                                ref_col, referred_tbl.primary_key()
+                            ):
+                                selector = f"""
+                                SELECT rw.rowid FROM (
+                                        {selector}
+                                ) AS fklog LEFT JOIN "_synq_id_{referred_tbl.name[0]}" AS rw
+                                    ON fklog.foreign_row_peer = rw.row_peer AND
+                                        fklog.foreign_row_ts = rw.row_ts
+                                """
+                            else:
+                                selector = f"""
+                                SELECT log.val FROM (
+                                        {selector}
+                                ) AS fklog LEFT JOIN _synq_log_extra AS log
+                                    ON log.row_peer = fklog.foreign_row_peer AND
+                                        log.row_ts = fklog.foreign_row_ts AND
+                                        log.field = {ids[(referred_tbl, ref_col)]} AND log.ul%2 = 0
+                                ORDER BY log.ts DESC, log.peer DESC LIMIT 1
+                                """
+                            selectors += [f'({selector}) AS "{col_name}"']
         merger += f"""
         INSERT OR REPLACE INTO "{tbl_name}"({', '.join(col_names)})
         SELECT {', '.join(selectors)} FROM (
