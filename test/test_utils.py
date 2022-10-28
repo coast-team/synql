@@ -10,19 +10,11 @@ Ts = tuple[int | None, int | None]  # (ts, peer)
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class Col:
+class Val:
     ts: Ts
     row: Ts
     name: str | int
     val: typing.Any
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class Ref:
-    ts: Ts
-    row: Ts
-    name: str | int
-    target: Ts
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -36,7 +28,7 @@ class Undo:
 class Crr:
     tbls: dict[str, set[typing.Any]]
     ctx: dict[int, int]
-    log: set[Col | Ref | Undo]
+    log: set[Val | Undo]
 
 
 def exec(db: sqlite3.Connection, q: str) -> None:
@@ -71,7 +63,7 @@ def crr_from(db: sqlite3.Connection) -> Crr:
         )
     log = (
         {
-            Col(ts=(ts, peer), row=(row_ts, row_peer), name=name, val=val)
+            Val(ts=(ts, peer), row=(row_ts, row_peer), name=name, val=val)
             for ts, peer, row_ts, row_peer, name, val in fetch(
                 db,
                 """
@@ -83,11 +75,11 @@ def crr_from(db: sqlite3.Connection) -> Crr:
         }
         .union(
             {
-                Ref(
+                Val(
                     ts=(ts, peer),
                     row=(row_ts, row_peer),
                     name=name,
-                    target=(frow_ts, frow_peer),
+                    val=(frow_ts, frow_peer),
                 )
                 for ts, peer, row_ts, row_peer, name, frow_ts, frow_peer in fetch(
                     db,

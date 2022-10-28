@@ -5,7 +5,7 @@ from synqlite import crr
 import pathlib
 from sqlschm import sql
 from dataclasses import dataclass
-from test_utils import exec, fetch, crr_from, Col, Ref, Undo, Crr
+from test_utils import exec, fetch, crr_from, Val, Undo, Crr
 
 
 _DEFAULT_CONF = crr.Config(physical_clock=False)
@@ -97,7 +97,7 @@ def test_repl_col(tmp_path: pathlib.Path) -> None:
         assert crr_from(a) == Crr(
             tbls={"X": {(1, "v1", (1, 1))}},
             ctx={1: 1},
-            log={Col(ts=(1, 1), row=(1, 1), name="v", val="v1")},
+            log={Val(ts=(1, 1), row=(1, 1), name="v", val="v1")},
         )
 
         exec(a, "UPDATE X SET v = 'v2'")
@@ -105,8 +105,8 @@ def test_repl_col(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, "v2", (1, 1))}},
             ctx={1: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
-                Col(ts=(2, 1), row=(1, 1), name="v", val="v2"),
+                Val(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Val(ts=(2, 1), row=(1, 1), name="v", val="v2"),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -122,7 +122,7 @@ def test_repl_pk(tmp_path: pathlib.Path) -> None:
         assert crr_from(a) == Crr(
             tbls={"X": {(1, (1, 1))}},
             ctx={1: 1},
-            log={Col(ts=(1, 1), row=(1, 1), name="x", val=1)},
+            log={Val(ts=(1, 1), row=(1, 1), name="x", val=1)},
         )
 
         exec(a, "INSERT INTO X VALUES(1) ON CONFLICT(x) DO UPDATE SET x = 2")
@@ -130,8 +130,8 @@ def test_repl_pk(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}},
             ctx={1: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(1, 1), name="x", val=2),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -153,7 +153,7 @@ def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 1))}},
             ctx={1: 2},
             log={
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
             },
         )
 
@@ -164,8 +164,8 @@ def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1)), (2, (3, 1))}, "Y": {(1, 2, (2, 1))}},
             ctx={1: 4},
             log={
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
-                Ref(ts=(4, 1), row=(2, 1), name="fk", target=(3, 1)),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
+                Val(ts=(4, 1), row=(2, 1), name="fk", val=(3, 1)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -190,8 +190,8 @@ def test_fk_repl_col(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
             },
         )
 
@@ -205,10 +205,10 @@ def test_fk_repl_col(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
-                Col(ts=(3, 1), row=(3, 1), name="x", val=2),
-                Ref(ts=(4, 1), row=(2, 1), name="fk", target=(3, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
+                Val(ts=(3, 1), row=(3, 1), name="x", val=2),
+                Val(ts=(4, 1), row=(2, 1), name="fk", val=(3, 1)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -240,9 +240,9 @@ def test_fk_repl_multi_col(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x1", val=2),
-                Col(ts=(1, 1), row=(1, 1), name="x2", val=3),
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x1", val=2),
+                Val(ts=(1, 1), row=(1, 1), name="x2", val=3),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
             },
         )
 
@@ -261,12 +261,12 @@ def test_fk_repl_multi_col(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x1", val=2),
-                Col(ts=(1, 1), row=(1, 1), name="x2", val=3),
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
-                Col(ts=(3, 1), row=(3, 1), name="x1", val=3),
-                Col(ts=(3, 1), row=(3, 1), name="x2", val=4),
-                Ref(ts=(4, 1), row=(2, 1), name="fk", target=(3, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x1", val=2),
+                Val(ts=(1, 1), row=(1, 1), name="x2", val=3),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
+                Val(ts=(3, 1), row=(3, 1), name="x1", val=3),
+                Val(ts=(3, 1), row=(3, 1), name="x2", val=4),
+                Val(ts=(4, 1), row=(2, 1), name="fk", val=(3, 1)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -289,10 +289,10 @@ def test_fk_up_cascade(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(1, 2, (2, 1))}},
             ctx={1: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
-                Ref(ts=(3, 1), row=(2, 1), name="fk", target=(1, 1)),
-                Col(ts=(4, 1), row=(1, 1), name="x", val=2),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
+                Val(ts=(3, 1), row=(2, 1), name="fk", val=(1, 1)),
+                Val(ts=(4, 1), row=(1, 1), name="x", val=2),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -315,10 +315,10 @@ def test_fk_up_set_null(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(1, None, (2, 1))}},
             ctx={1: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
-                Ref(ts=(3, 1), row=(2, 1), name="fk", target=(None, None)),
-                Col(ts=(4, 1), row=(1, 1), name="x", val=2),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
+                Val(ts=(3, 1), row=(2, 1), name="fk", val=(None, None)),
+                Val(ts=(4, 1), row=(1, 1), name="x", val=2),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -396,7 +396,7 @@ def test_pull_repl_col(tmp_path: pathlib.Path) -> None:
         assert crr_from(b) == Crr(
             tbls={"X": {(1, "v1", (1, 1))}},
             ctx={1: 1, 2: 0},
-            log={Col(ts=(1, 1), row=(1, 1), name="v", val="v1")},
+            log={Val(ts=(1, 1), row=(1, 1), name="v", val="v1")},
         )
 
         exec(a, "UPDATE X SET v = 'v2'")
@@ -405,8 +405,8 @@ def test_pull_repl_col(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, "v2", (1, 1))}},
             ctx={1: 2, 2: 0},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
-                Col(ts=(2, 1), row=(1, 1), name="v", val="v2"),
+                Val(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Val(ts=(2, 1), row=(1, 1), name="v", val="v2"),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -432,7 +432,7 @@ def test_pull_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 1))}},
             ctx={1: 2, 2: 0},
             log={
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
             },
         )
 
@@ -451,8 +451,8 @@ def test_pull_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 4, 2: 0},
             log={
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
-                Ref(ts=(4, 1), row=(2, 1), name="fk", target=(3, 1)),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
+                Val(ts=(4, 1), row=(2, 1), name="fk", val=(3, 1)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -487,9 +487,9 @@ def test_pull_fk_fk(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 3, 2: 0},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Ref(ts=(2, 1), row=(2, 1), name="fk1", target=(1, 1)),
-                Ref(ts=(3, 1), row=(3, 1), name="fk2", target=(2, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(2, 1), name="fk1", val=(1, 1)),
+                Val(ts=(3, 1), row=(3, 1), name="fk2", val=(2, 1)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -553,8 +553,8 @@ def test_concur_ins_repl_col(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 1, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="v", val="a1"),
-                Col(ts=(1, 2), row=(1, 2), name="v", val="b1"),
+                Val(ts=(1, 1), row=(1, 1), name="v", val="a1"),
+                Val(ts=(1, 2), row=(1, 2), name="v", val="b1"),
             },
         )
 
@@ -571,10 +571,10 @@ def test_concur_ins_repl_col(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 3, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="v", val="a1"),
-                Col(ts=(1, 2), row=(1, 2), name="v", val="b1"),
-                Col(ts=(3, 1), row=(1, 1), name="v", val="a2"),
-                Col(ts=(3, 2), row=(1, 1), name="v", val="b2"),
+                Val(ts=(1, 1), row=(1, 1), name="v", val="a1"),
+                Val(ts=(1, 2), row=(1, 2), name="v", val="b1"),
+                Val(ts=(3, 1), row=(1, 1), name="v", val="a2"),
+                Val(ts=(3, 2), row=(1, 1), name="v", val="b2"),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -597,8 +597,8 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("v1", (1, 1))}},
             ctx={1: 1, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
-                Col(ts=(1, 2), row=(1, 2), name="v", val="v1"),
+                Val(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Val(ts=(1, 2), row=(1, 2), name="v", val="v1"),
                 Undo(ts=(2, 2), obj=(1, 2), ul=1),
             },
         )
@@ -608,8 +608,8 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("v1", (1, 1))}},
             ctx={1: 2, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
-                Col(ts=(1, 2), row=(1, 2), name="v", val="v1"),
+                Val(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Val(ts=(1, 2), row=(1, 2), name="v", val="v1"),
                 Undo(ts=(2, 1), obj=(1, 2), ul=1),
             },
         )
@@ -633,8 +633,8 @@ def test_unique_nulls(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, None, (1, 1)), (1, None, (1, 2))}},
             ctx={1: 1, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="v", val=None),
-                Col(ts=(1, 2), row=(1, 2), name="v", val=None),
+                Val(ts=(1, 1), row=(1, 1), name="v", val=None),
+                Val(ts=(1, 2), row=(1, 2), name="v", val=None),
             },
         )
 
@@ -643,8 +643,8 @@ def test_unique_nulls(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, None, (1, 1)), (2, None, (1, 2))}},
             ctx={1: 1, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="v", val=None),
-                Col(ts=(1, 2), row=(1, 2), name="v", val=None),
+                Val(ts=(1, 1), row=(1, 1), name="v", val=None),
+                Val(ts=(1, 2), row=(1, 2), name="v", val=None),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -669,14 +669,14 @@ def test_multi_col_conflicting_keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, 2, (1, 1)), (1, 3, (2, 1)), (1, 4, (2, 2))}},
             ctx={1: 2, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="a", val=1),
-                Col(ts=(1, 1), row=(1, 1), name="b", val=2),
-                Col(ts=(2, 1), row=(2, 1), name="a", val=1),
-                Col(ts=(2, 1), row=(2, 1), name="b", val=3),
-                Col(ts=(1, 2), row=(1, 2), name="a", val=1),
-                Col(ts=(1, 2), row=(1, 2), name="b", val=2),
-                Col(ts=(2, 2), row=(2, 2), name="a", val=1),
-                Col(ts=(2, 2), row=(2, 2), name="b", val=4),
+                Val(ts=(1, 1), row=(1, 1), name="a", val=1),
+                Val(ts=(1, 1), row=(1, 1), name="b", val=2),
+                Val(ts=(2, 1), row=(2, 1), name="a", val=1),
+                Val(ts=(2, 1), row=(2, 1), name="b", val=3),
+                Val(ts=(1, 2), row=(1, 2), name="a", val=1),
+                Val(ts=(1, 2), row=(1, 2), name="b", val=2),
+                Val(ts=(2, 2), row=(2, 2), name="a", val=1),
+                Val(ts=(2, 2), row=(2, 2), name="b", val=4),
                 Undo(ts=(3, 2), obj=(1, 2), ul=1),
             },
         )
@@ -686,14 +686,14 @@ def test_multi_col_conflicting_keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, 2, (1, 1)), (1, 3, (2, 1)), (1, 4, (2, 2))}},
             ctx={1: 3, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="a", val=1),
-                Col(ts=(1, 1), row=(1, 1), name="b", val=2),
-                Col(ts=(2, 1), row=(2, 1), name="a", val=1),
-                Col(ts=(2, 1), row=(2, 1), name="b", val=3),
-                Col(ts=(1, 2), row=(1, 2), name="a", val=1),
-                Col(ts=(1, 2), row=(1, 2), name="b", val=2),
-                Col(ts=(2, 2), row=(2, 2), name="a", val=1),
-                Col(ts=(2, 2), row=(2, 2), name="b", val=4),
+                Val(ts=(1, 1), row=(1, 1), name="a", val=1),
+                Val(ts=(1, 1), row=(1, 1), name="b", val=2),
+                Val(ts=(2, 1), row=(2, 1), name="a", val=1),
+                Val(ts=(2, 1), row=(2, 1), name="b", val=3),
+                Val(ts=(1, 2), row=(1, 2), name="a", val=1),
+                Val(ts=(1, 2), row=(1, 2), name="b", val=2),
+                Val(ts=(2, 2), row=(2, 2), name="a", val=1),
+                Val(ts=(2, 2), row=(2, 2), name="b", val=4),
                 Undo(ts=(3, 1), obj=(1, 2), ul=1),
             },
         )
@@ -717,12 +717,12 @@ def test_multi_col_multi_covering_unique(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, 2, 3, (1, 1)), (1, 4, 3, (1, 2))}},
             ctx={1: 1, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="a", val=1),
-                Col(ts=(1, 1), row=(1, 1), name="b", val=2),
-                Col(ts=(1, 1), row=(1, 1), name="c", val=3),
-                Col(ts=(1, 2), row=(1, 2), name="a", val=1),
-                Col(ts=(1, 2), row=(1, 2), name="b", val=4),
-                Col(ts=(1, 2), row=(1, 2), name="c", val=3),
+                Val(ts=(1, 1), row=(1, 1), name="a", val=1),
+                Val(ts=(1, 1), row=(1, 1), name="b", val=2),
+                Val(ts=(1, 1), row=(1, 1), name="c", val=3),
+                Val(ts=(1, 2), row=(1, 2), name="a", val=1),
+                Val(ts=(1, 2), row=(1, 2), name="b", val=4),
+                Val(ts=(1, 2), row=(1, 2), name="c", val=3),
             },
         )
 
@@ -731,12 +731,12 @@ def test_multi_col_multi_covering_unique(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, 2, 3, (1, 1)), (1, 4, 3, (1, 2))}},
             ctx={1: 1, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="a", val=1),
-                Col(ts=(1, 1), row=(1, 1), name="b", val=2),
-                Col(ts=(1, 1), row=(1, 1), name="c", val=3),
-                Col(ts=(1, 2), row=(1, 2), name="a", val=1),
-                Col(ts=(1, 2), row=(1, 2), name="b", val=4),
-                Col(ts=(1, 2), row=(1, 2), name="c", val=3),
+                Val(ts=(1, 1), row=(1, 1), name="a", val=1),
+                Val(ts=(1, 1), row=(1, 1), name="b", val=2),
+                Val(ts=(1, 1), row=(1, 1), name="c", val=3),
+                Val(ts=(1, 2), row=(1, 2), name="a", val=1),
+                Val(ts=(1, 2), row=(1, 2), name="b", val=4),
+                Val(ts=(1, 2), row=(1, 2), name="c", val=3),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -761,9 +761,9 @@ def test_conflicting_unique_fk(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, (2, 1))}},
             ctx={1: 2, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Undo(ts=(3, 2), obj=(2, 2), ul=1),
             },
         )
@@ -773,9 +773,9 @@ def test_conflicting_unique_fk(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, (2, 1))}},
             ctx={1: 3, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Undo(ts=(3, 1), obj=(2, 2), ul=1),
             },
         )
@@ -805,13 +805,13 @@ def test_multi_col_fk_multi_covering_unique(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 1)), (2, 1, (3, 2))}},
             ctx={1: 2, 2: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Col(ts=(2, 1), row=(2, 1), name="y", val=1),
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
-                Col(ts=(2, 2), row=(2, 2), name="y", val=1),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
-                Col(ts=(3, 2), row=(3, 2), name="y", val=2),
-                Ref(ts=(3, 2), row=(3, 2), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(2, 1), name="y", val=1),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
+                Val(ts=(2, 2), row=(2, 2), name="y", val=1),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
+                Val(ts=(3, 2), row=(3, 2), name="y", val=2),
+                Val(ts=(3, 2), row=(3, 2), name="fk", val=(1, 1)),
                 Undo(ts=(4, 2), obj=(2, 2), ul=1),
             },
         )
@@ -821,13 +821,13 @@ def test_multi_col_fk_multi_covering_unique(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 1)), (2, 1, (3, 2))}},
             ctx={1: 4, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Col(ts=(2, 1), row=(2, 1), name="y", val=1),
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
-                Col(ts=(2, 2), row=(2, 2), name="y", val=1),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
-                Col(ts=(3, 2), row=(3, 2), name="y", val=2),
-                Ref(ts=(3, 2), row=(3, 2), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(2, 1), name="y", val=1),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
+                Val(ts=(2, 2), row=(2, 2), name="y", val=1),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
+                Val(ts=(3, 2), row=(3, 2), name="y", val=2),
+                Val(ts=(3, 2), row=(3, 2), name="fk", val=(1, 1)),
                 Undo(ts=(4, 1), obj=(2, 2), ul=1),
             },
         )
@@ -852,9 +852,9 @@ def test_past_conflicting_keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("v2", (1, 1)), ("v1", (1, 2))}},
             ctx={1: 2, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
-                Col(ts=(2, 1), row=(1, 1), name="v", val="v2"),
-                Col(ts=(1, 2), row=(1, 2), name="v", val="v1"),
+                Val(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Val(ts=(2, 1), row=(1, 1), name="v", val="v2"),
+                Val(ts=(1, 2), row=(1, 2), name="v", val="v1"),
             },
         )
 
@@ -863,9 +863,9 @@ def test_past_conflicting_keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("v2", (1, 1)), ("v1", (1, 2))}},
             ctx={1: 2, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
-                Col(ts=(2, 1), row=(1, 1), name="v", val="v2"),
-                Col(ts=(1, 2), row=(1, 2), name="v", val="v1"),
+                Val(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Val(ts=(2, 1), row=(1, 1), name="v", val="v2"),
+                Val(ts=(1, 2), row=(1, 2), name="v", val="v1"),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -889,12 +889,12 @@ def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("u1", "v1", (1, 1))}},
             ctx={1: 2, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="u", val="u1"),
-                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
-                Col(ts=(2, 1), row=(2, 1), name="u", val="u2"),
-                Col(ts=(2, 1), row=(2, 1), name="v", val="v2"),
-                Col(ts=(1, 2), row=(1, 2), name="u", val="u1"),
-                Col(ts=(1, 2), row=(1, 2), name="v", val="v2"),
+                Val(ts=(1, 1), row=(1, 1), name="u", val="u1"),
+                Val(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Val(ts=(2, 1), row=(2, 1), name="u", val="u2"),
+                Val(ts=(2, 1), row=(2, 1), name="v", val="v2"),
+                Val(ts=(1, 2), row=(1, 2), name="u", val="u1"),
+                Val(ts=(1, 2), row=(1, 2), name="v", val="v2"),
                 Undo(ts=(3, 2), obj=(1, 2), ul=1),
                 Undo(ts=(3, 2), obj=(2, 1), ul=1),
             },
@@ -905,12 +905,12 @@ def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
             tbls={"X": {("u1", "v1", (1, 1))}},
             ctx={1: 3, 2: 1},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="u", val="u1"),
-                Col(ts=(1, 1), row=(1, 1), name="v", val="v1"),
-                Col(ts=(2, 1), row=(2, 1), name="u", val="u2"),
-                Col(ts=(2, 1), row=(2, 1), name="v", val="v2"),
-                Col(ts=(1, 2), row=(1, 2), name="u", val="u1"),
-                Col(ts=(1, 2), row=(1, 2), name="v", val="v2"),
+                Val(ts=(1, 1), row=(1, 1), name="u", val="u1"),
+                Val(ts=(1, 1), row=(1, 1), name="v", val="v1"),
+                Val(ts=(2, 1), row=(2, 1), name="u", val="u2"),
+                Val(ts=(2, 1), row=(2, 1), name="v", val="v2"),
+                Val(ts=(1, 2), row=(1, 2), name="u", val="u1"),
+                Val(ts=(1, 2), row=(1, 2), name="v", val="v2"),
                 Undo(ts=(3, 1), obj=(1, 2), ul=1),
                 Undo(ts=(3, 1), obj=(2, 1), ul=1),
             },
@@ -940,7 +940,7 @@ def test_concur_del_fk_restrict_aliased_rowid(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 3, 2: 2},
             log={
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Undo(ts=(3, 1), obj=(1, 1), ul=2),
             },
         )
@@ -950,7 +950,7 @@ def test_concur_del_fk_restrict_aliased_rowid(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 2, 2: 3},
             log={
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Undo(ts=(3, 2), obj=(1, 1), ul=2),
             },
         )
@@ -982,8 +982,8 @@ def test_concur_past_del_fk_restrict(tmp_path: pathlib.Path) -> None:
             ctx={1: 2, 2: 4},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
-                Ref(ts=(4, 2), row=(2, 2), name="fk", target=(3, 2)),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
+                Val(ts=(4, 2), row=(2, 2), name="fk", val=(3, 2)),
             },
         )
 
@@ -993,8 +993,8 @@ def test_concur_past_del_fk_restrict(tmp_path: pathlib.Path) -> None:
             ctx={1: 2, 2: 4},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
-                Ref(ts=(4, 2), row=(2, 2), name="fk", target=(3, 2)),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
+                Val(ts=(4, 2), row=(2, 2), name="fk", val=(3, 2)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -1022,8 +1022,8 @@ def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 3, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Undo(ts=(3, 1), obj=(1, 1), ul=2),
             },
         )
@@ -1033,8 +1033,8 @@ def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 2, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Undo(ts=(3, 2), obj=(1, 1), ul=2),
             },
         )
@@ -1068,8 +1068,8 @@ def test_concur_del_fk_restrict_rec(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}, "Z": {(1, 1, (3, 2))}},
             ctx={1: 4, 2: 3},
             log={
-                Ref(ts=(2, 2), row=(2, 2), name="fk1", target=(1, 1)),
-                Ref(ts=(3, 2), row=(3, 2), name="fk2", target=(2, 2)),
+                Val(ts=(2, 2), row=(2, 2), name="fk1", val=(1, 1)),
+                Val(ts=(3, 2), row=(3, 2), name="fk2", val=(2, 2)),
                 Undo(ts=(4, 1), obj=(1, 1), ul=2),
             },
         )
@@ -1079,8 +1079,8 @@ def test_concur_del_fk_restrict_rec(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}, "Z": {(1, 1, (3, 2))}},
             ctx={1: 2, 2: 4},
             log={
-                Ref(ts=(2, 2), row=(2, 2), name="fk1", target=(1, 1)),
-                Ref(ts=(3, 2), row=(3, 2), name="fk2", target=(2, 2)),
+                Val(ts=(2, 2), row=(2, 2), name="fk1", val=(1, 1)),
+                Val(ts=(3, 2), row=(3, 2), name="fk2", val=(2, 2)),
                 Undo(ts=(4, 2), obj=(1, 1), ul=2),
             },
         )
@@ -1110,7 +1110,7 @@ def test_concur_del_fk_cascade(tmp_path: pathlib.Path) -> None:
             ctx={1: 3, 2: 2},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Undo(ts=(3, 1), obj=(2, 2), ul=1),
             },
         )
@@ -1121,7 +1121,7 @@ def test_concur_del_fk_cascade(tmp_path: pathlib.Path) -> None:
             ctx={1: 2, 2: 3},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Undo(ts=(3, 2), obj=(2, 2), ul=1),
             },
         )
@@ -1151,8 +1151,8 @@ def test_concur_del_fk_set_null(tmp_path: pathlib.Path) -> None:
             ctx={1: 4, 2: 2},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
-                Ref(ts=(4, 1), row=(2, 2), name="fk", target=(None, None)),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
+                Val(ts=(4, 1), row=(2, 2), name="fk", val=(None, None)),
             },
         )
 
@@ -1162,8 +1162,8 @@ def test_concur_del_fk_set_null(tmp_path: pathlib.Path) -> None:
             ctx={1: 2, 2: 4},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
-                Ref(ts=(4, 2), row=(2, 2), name="fk", target=(None, None)),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
+                Val(ts=(4, 2), row=(2, 2), name="fk", val=(None, None)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -1191,9 +1191,9 @@ def test_concur_up_fk_restrict(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 3, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Undo(ts=(3, 1), obj=(2, 1), ul=1),
             },
         )
@@ -1203,9 +1203,9 @@ def test_concur_up_fk_restrict(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 2, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Undo(ts=(3, 2), obj=(2, 1), ul=1),
             },
         )
@@ -1235,10 +1235,10 @@ def test_concur_up2_fk_restrict(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 4, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
-                Col(ts=(3, 1), row=(1, 1), name="x", val=3),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Val(ts=(3, 1), row=(1, 1), name="x", val=3),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Undo(ts=(4, 1), obj=(2, 1), ul=1),
                 Undo(ts=(4, 1), obj=(3, 1), ul=1),
             },
@@ -1249,10 +1249,10 @@ def test_concur_up2_fk_restrict(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 2))}},
             ctx={1: 3, 2: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
-                Col(ts=(3, 1), row=(1, 1), name="x", val=3),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Val(ts=(3, 1), row=(1, 1), name="x", val=3),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Undo(ts=(4, 2), obj=(2, 1), ul=1),
                 Undo(ts=(4, 2), obj=(3, 1), ul=1),
             },
@@ -1282,10 +1282,10 @@ def test_concur_up_fk_cascade(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(1, 2, (2, 2))}},
             ctx={1: 4, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
-                Ref(ts=(4, 1), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
+                Val(ts=(4, 1), row=(2, 2), name="fk", val=(1, 1)),
             },
         )
 
@@ -1294,10 +1294,10 @@ def test_concur_up_fk_cascade(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(1, 2, (2, 2))}},
             ctx={1: 2, 2: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
-                Ref(ts=(4, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
+                Val(ts=(4, 2), row=(2, 2), name="fk", val=(1, 1)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -1325,10 +1325,10 @@ def test_concur_up_fk_set_null(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(1, None, (2, 2))}},
             ctx={1: 4, 2: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
-                Ref(ts=(4, 1), row=(2, 2), name="fk", target=(None, None)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
+                Val(ts=(4, 1), row=(2, 2), name="fk", val=(None, None)),
             },
         )
 
@@ -1337,10 +1337,10 @@ def test_concur_up_fk_set_null(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(1, None, (2, 2))}},
             ctx={1: 2, 2: 4},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
-                Ref(ts=(4, 2), row=(2, 2), name="fk", target=(None, None)),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
+                Val(ts=(4, 2), row=(2, 2), name="fk", val=(None, None)),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -1370,12 +1370,12 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(2, (2, 2))}},
             ctx={1: 5, 2: 3},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
-                Col(ts=(3, 2), row=(3, 2), name="x", val=2),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
+                Val(ts=(3, 2), row=(3, 2), name="x", val=2),
                 Undo(ts=(4, 1), obj=(1, 1), ul=2),
-                Ref(ts=(5, 1), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(5, 1), row=(2, 2), name="fk", val=(1, 1)),
                 Undo(ts=(5, 1), obj=(3, 2), ul=1),
             },
         )
@@ -1385,12 +1385,12 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
             tbls={"X": {(2, (1, 1))}, "Y": {(2, (2, 2))}},
             ctx={1: 3, 2: 5},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x", val=1),
-                Col(ts=(2, 1), row=(1, 1), name="x", val=2),
-                Ref(ts=(2, 2), row=(2, 2), name="fk", target=(1, 1)),
-                Col(ts=(3, 2), row=(3, 2), name="x", val=2),
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Val(ts=(2, 1), row=(1, 1), name="x", val=2),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
+                Val(ts=(3, 2), row=(3, 2), name="x", val=2),
                 Undo(ts=(4, 2), obj=(1, 1), ul=2),
-                Ref(ts=(5, 2), row=(2, 2), name="fk", target=(1, 1)),
+                Val(ts=(5, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Undo(ts=(5, 2), obj=(3, 2), ul=1),
             },
         )
@@ -1449,22 +1449,22 @@ def test_concur_complex_2(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 7, 2: 7},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="name", val="B1"),
-                Col(ts=(2, 1), row=(2, 1), name="name", val="B2"),
-                Col(ts=(3, 1), row=(3, 1), name="name", val="P1"),
-                Col(ts=(4, 1), row=(4, 1), name="name", val="P2"),
-                Col(ts=(5, 1), row=(5, 1), name="name", val="S1"),
-                Col(ts=(5, 2), row=(5, 2), name="name", val="S2"),
-                Ref(ts=(6, 1), row=(6, 1), name="book_fk", target=(1, 1)),
-                Ref(ts=(6, 1), row=(6, 1), name="publisher_fk", target=(3, 1)),
-                Ref(ts=(6, 2), row=(6, 2), name="book_fk", target=(1, 1)),
-                Ref(ts=(6, 2), row=(6, 2), name="publisher_fk", target=(4, 1)),
-                Ref(ts=(7, 1), row=(7, 1), name="published_book_fk", target=(6, 1)),
-                Ref(ts=(7, 1), row=(7, 1), name="store_fk", target=(5, 1)),
-                Col(ts=(7, 1), row=(7, 1), name="count", val=4),
-                Ref(ts=(7, 2), row=(7, 2), name="published_book_fk", target=(6, 2)),
-                Ref(ts=(7, 2), row=(7, 2), name="store_fk", target=(5, 2)),
-                Col(ts=(7, 2), row=(7, 2), name="count", val=5),
+                Val(ts=(1, 1), row=(1, 1), name="name", val="B1"),
+                Val(ts=(2, 1), row=(2, 1), name="name", val="B2"),
+                Val(ts=(3, 1), row=(3, 1), name="name", val="P1"),
+                Val(ts=(4, 1), row=(4, 1), name="name", val="P2"),
+                Val(ts=(5, 1), row=(5, 1), name="name", val="S1"),
+                Val(ts=(5, 2), row=(5, 2), name="name", val="S2"),
+                Val(ts=(6, 1), row=(6, 1), name="book_fk", val=(1, 1)),
+                Val(ts=(6, 1), row=(6, 1), name="publisher_fk", val=(3, 1)),
+                Val(ts=(6, 2), row=(6, 2), name="book_fk", val=(1, 1)),
+                Val(ts=(6, 2), row=(6, 2), name="publisher_fk", val=(4, 1)),
+                Val(ts=(7, 1), row=(7, 1), name="published_book_fk", val=(6, 1)),
+                Val(ts=(7, 1), row=(7, 1), name="store_fk", val=(5, 1)),
+                Val(ts=(7, 1), row=(7, 1), name="count", val=4),
+                Val(ts=(7, 2), row=(7, 2), name="published_book_fk", val=(6, 2)),
+                Val(ts=(7, 2), row=(7, 2), name="store_fk", val=(5, 2)),
+                Val(ts=(7, 2), row=(7, 2), name="count", val=5),
             },
         )
 
@@ -1479,22 +1479,22 @@ def test_concur_complex_2(tmp_path: pathlib.Path) -> None:
             },
             ctx={1: 7, 2: 7},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="name", val="B1"),
-                Col(ts=(2, 1), row=(2, 1), name="name", val="B2"),
-                Col(ts=(3, 1), row=(3, 1), name="name", val="P1"),
-                Col(ts=(4, 1), row=(4, 1), name="name", val="P2"),
-                Col(ts=(5, 1), row=(5, 1), name="name", val="S1"),
-                Col(ts=(5, 2), row=(5, 2), name="name", val="S2"),
-                Ref(ts=(6, 1), row=(6, 1), name="book_fk", target=(1, 1)),
-                Ref(ts=(6, 1), row=(6, 1), name="publisher_fk", target=(3, 1)),
-                Ref(ts=(6, 2), row=(6, 2), name="book_fk", target=(1, 1)),
-                Ref(ts=(6, 2), row=(6, 2), name="publisher_fk", target=(4, 1)),
-                Ref(ts=(7, 1), row=(7, 1), name="published_book_fk", target=(6, 1)),
-                Ref(ts=(7, 1), row=(7, 1), name="store_fk", target=(5, 1)),
-                Col(ts=(7, 1), row=(7, 1), name="count", val=4),
-                Ref(ts=(7, 2), row=(7, 2), name="published_book_fk", target=(6, 2)),
-                Ref(ts=(7, 2), row=(7, 2), name="store_fk", target=(5, 2)),
-                Col(ts=(7, 2), row=(7, 2), name="count", val=5),
+                Val(ts=(1, 1), row=(1, 1), name="name", val="B1"),
+                Val(ts=(2, 1), row=(2, 1), name="name", val="B2"),
+                Val(ts=(3, 1), row=(3, 1), name="name", val="P1"),
+                Val(ts=(4, 1), row=(4, 1), name="name", val="P2"),
+                Val(ts=(5, 1), row=(5, 1), name="name", val="S1"),
+                Val(ts=(5, 2), row=(5, 2), name="name", val="S2"),
+                Val(ts=(6, 1), row=(6, 1), name="book_fk", val=(1, 1)),
+                Val(ts=(6, 1), row=(6, 1), name="publisher_fk", val=(3, 1)),
+                Val(ts=(6, 2), row=(6, 2), name="book_fk", val=(1, 1)),
+                Val(ts=(6, 2), row=(6, 2), name="publisher_fk", val=(4, 1)),
+                Val(ts=(7, 1), row=(7, 1), name="published_book_fk", val=(6, 1)),
+                Val(ts=(7, 1), row=(7, 1), name="store_fk", val=(5, 1)),
+                Val(ts=(7, 1), row=(7, 1), name="count", val=4),
+                Val(ts=(7, 2), row=(7, 2), name="published_book_fk", val=(6, 2)),
+                Val(ts=(7, 2), row=(7, 2), name="store_fk", val=(5, 2)),
+                Val(ts=(7, 2), row=(7, 2), name="count", val=5),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -1515,8 +1515,8 @@ def test_spaced_names(tmp_path: pathlib.Path) -> None:
             tbls={"X ": {(1, (1, 1))}, "Y ": {(1, (2, 1))}},
             ctx={1: 2},
             log={
-                Col(ts=(1, 1), row=(1, 1), name="x ", val=1),
-                Ref(ts=(2, 1), row=(2, 1), name="fk", target=(1, 1)),
+                Val(ts=(1, 1), row=(1, 1), name="x ", val=1),
+                Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
             },
         )
         exec(a, "PRAGMA integrity_check")
