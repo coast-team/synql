@@ -41,7 +41,7 @@ def normalize_fk_action(
 
 
 _SELECT_AR_TABLE_SCHEMA = """--sql
-SELECT sql FROM sqlite_master WHERE type = 'table' AND
+SELECT sql FROM sqlite_master WHERE (type = 'table' OR type = 'index') AND
     name NOT LIKE 'sqlite_%' AND name NOT LIKE '_synq_%';
 """
 
@@ -220,7 +220,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
     result = ""
     ids = utils.ids(tables)
     for (tbl_name, tbl) in tables.items():
-        tbl_uniqueness = list(tbl.uniqueness())
+        tbl_uniqueness = tuple(tbl.uniqueness())
         replicated_cols = tuple(utils.replicated_columns(tbl))
         # we use a dot (peer, ts) to globally and uniquely identify an object.
         # An object is either a row or a log entry.
@@ -252,7 +252,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
         ) STRICT;
 
         CREATE TRIGGER "_synq_delete_{tbl_name}"
-        AFTER DELETE ON "{tbl_name}" WHEN (SELECT NOT is_merging FROM _synq_local)
+        AFTER DELETE ON "{tbl_name}"
         BEGIN
             DELETE FROM "_synq_id_{tbl_name}" WHERE rowid = OLD.rowid;
         END;
@@ -789,13 +789,6 @@ def _create_pull(tables: sql.Symbols) -> str:
 
         -- Apply deletion (existing rows)
         DELETE FROM "{tbl_name}" WHERE rowid IN (
-            SELECT id.rowid FROM "_synq_id_{tbl_name}" AS id
-                JOIN _synq_id_undo AS undo
-                    ON id.row_ts = undo.row_ts AND id.row_peer = undo.row_peer
-            WHERE undo.ul%2 = 1
-        );
-
-        DELETE FROM "_synq_id_{tbl_name}" WHERE rowid IN (
             SELECT id.rowid FROM "_synq_id_{tbl_name}" AS id
                 JOIN _synq_id_undo AS undo
                     ON id.row_ts = undo.row_ts AND id.row_peer = undo.row_peer
