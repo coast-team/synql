@@ -46,7 +46,7 @@ SELECT sql FROM sqlite_master WHERE type = 'table' AND
 """
 
 _CREATE_TABLES = """
-CREATE TABLE IF NOT EXISTS _synq_local(
+CREATE TABLE _synq_local(
     id integer PRIMARY KEY DEFAULT 1 CHECK(id = 1),
     peer integer NOT NULL DEFAULT 0,
     ts integer NOT NULL DEFAULT 0 CHECK(ts >= 0),
@@ -55,7 +55,6 @@ CREATE TABLE IF NOT EXISTS _synq_local(
 INSERT INTO _synq_local DEFAULT VALUES;
 
 -- use `UPDATE _synq_local SET ts = ts + 1` to refresh the hybrid logical clock
-DROP TRIGGER IF EXISTS  _synq_local_clock;
 CREATE TRIGGER          _synq_local_clock
 AFTER UPDATE OF ts ON _synq_local WHEN (OLD.ts + 1 = NEW.ts)
 BEGIN
@@ -67,12 +66,12 @@ BEGIN
 END;
 
 -- Causal context
-CREATE TABLE IF NOT EXISTS _synq_context(
+CREATE TABLE _synq_context(
     peer integer PRIMARY KEY,
     ts integer NOT NULL DEFAULT 0 CHECK (ts >= 0)
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS _synq_id(
+CREATE TABLE _synq_id(
     row_ts integer NOT NULL,
     row_peer integer NOT NULL REFERENCES _synq_context(peer) ON DELETE CASCADE ON UPDATE CASCADE,
     tbl integer NOT NULL,
@@ -80,7 +79,7 @@ CREATE TABLE IF NOT EXISTS _synq_id(
     UNIQUE(row_peer, row_ts)
 ) STRICT, WITHOUT ROWID;
 
-CREATE TABLE IF NOT EXISTS _synq_id_undo(
+CREATE TABLE _synq_id_undo(
     row_ts integer NOT NULL,
     row_peer integer NOT NULL,
     ul integer NOT NULL DEFAULT 0 CHECK(ul >= 0), -- undo length
@@ -90,15 +89,15 @@ CREATE TABLE IF NOT EXISTS _synq_id_undo(
     FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
         ON DELETE CASCADE ON UPDATE CASCADE
 ) STRICT, WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS _synq_id_undo_index_ts ON _synq_id_undo(peer, ts);
+CREATE INDEX _synq_id_undo_index_ts ON _synq_id_undo(peer, ts);
 
-CREATE TABLE IF NOT EXISTS _synq_uniqueness(
+CREATE TABLE _synq_uniqueness(
     field integer NOT NULL,
     tbl_index integer NOT NULL,
     PRIMARY KEY(field, tbl_index)
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS _synq_fk(
+CREATE TABLE _synq_fk(
     field integer PRIMARY KEY,
     -- 0: CASCADE, 1: RESTRICT, 2: SET NULL
     on_delete integer NOT NULL CHECK(on_delete BETWEEN 0 AND 2),
@@ -106,7 +105,7 @@ CREATE TABLE IF NOT EXISTS _synq_fk(
     foreign_index integer NOT NULL
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS _synq_log(
+CREATE TABLE _synq_log(
     ts integer NOT NULL CHECK(ts >= row_ts),
     peer integer NOT NULL,
     row_ts integer NOT NULL,
@@ -117,9 +116,9 @@ CREATE TABLE IF NOT EXISTS _synq_log(
     FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
         ON DELETE CASCADE ON UPDATE CASCADE
 ) STRICT;
-CREATE INDEX IF NOT EXISTS _synq_log_index_ts ON _synq_log(peer, ts);
+CREATE INDEX _synq_log_index_ts ON _synq_log(peer, ts);
 
-CREATE TABLE IF NOT EXISTS _synq_fklog(
+CREATE TABLE _synq_fklog(
     ts integer NOT NULL CHECK(ts >= row_ts),
     peer integer NOT NULL,
     row_ts integer NOT NULL,
@@ -133,9 +132,9 @@ CREATE TABLE IF NOT EXISTS _synq_fklog(
     FOREIGN KEY(foreign_row_ts, foreign_row_peer) REFERENCES _synq_id(row_ts, row_peer)
         ON DELETE NO ACTION ON UPDATE CASCADE
 ) STRICT;
-CREATE INDEX IF NOT EXISTS _synq_fklog_index_ts ON _synq_fklog(peer, ts);
+CREATE INDEX _synq_fklog_index_ts ON _synq_fklog(peer, ts);
 
-CREATE TABLE IF NOT EXISTS _synq_undolog(
+CREATE TABLE _synq_undolog(
     obj_ts integer NOT NULL,
     obj_peer integer NOT NULL,
     ul integer NOT NULL DEFAULT 0 CHECK(ul >= 0), -- undo length
@@ -143,10 +142,9 @@ CREATE TABLE IF NOT EXISTS _synq_undolog(
     peer integer NOT NULL,
     PRIMARY KEY(obj_ts DESC, obj_peer DESC)
 ) STRICT, WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS _synq_undolog_ts ON _synq_undolog(peer, ts);
+CREATE INDEX _synq_undolog_ts ON _synq_undolog(peer, ts);
 
-DROP VIEW IF EXISTS _synq_log_extra;
-CREATE VIEW         _synq_log_extra AS
+CREATE VIEW _synq_log_extra AS
 SELECT log.*, ifnull(undo.ul, 0) AS ul, ifnull(tbl_undo.ul, 0) AS row_ul
 FROM _synq_log AS log
     LEFT JOIN _synq_id_undo AS tbl_undo
@@ -154,8 +152,7 @@ FROM _synq_log AS log
     LEFT JOIN _synq_undolog AS undo
         ON log.ts = undo.obj_ts AND log.peer = undo.obj_peer;
 
-DROP VIEW IF EXISTS _synq_log_effective;
-CREATE VIEW         _synq_log_effective AS
+CREATE VIEW _synq_log_effective AS
 SELECT log.* FROM _synq_log_extra AS log
 WHERE log.ul%2 = 0 AND NOT EXISTS(
     SELECT 1 FROM _synq_log_extra AS self
@@ -163,8 +160,7 @@ WHERE log.ul%2 = 0 AND NOT EXISTS(
         (self.ts > log.ts OR (self.ts = log.ts AND self.peer > log.peer)) AND self.ul%2 = 0
 );
 
-DROP VIEW IF EXISTS _synq_fklog_extra;
-CREATE VIEW         _synq_fklog_extra AS
+CREATE VIEW _synq_fklog_extra AS
 SELECT fklog.*, ifnull(undo.ul, 0) AS ul, ifnull(tbl_undo.ul, 0) AS row_ul,
     fk.on_update, fk.on_delete, fk.foreign_index
 FROM _synq_fklog AS fklog
@@ -175,8 +171,7 @@ FROM _synq_fklog AS fklog
     LEFT JOIN _synq_fk AS fk
         USING(field);
 
-DROP VIEW IF EXISTS _synq_fklog_effective;
-CREATE VIEW         _synq_fklog_effective AS
+CREATE VIEW _synq_fklog_effective AS
 SELECT fklog.* FROM _synq_fklog_extra AS fklog
 WHERE fklog.ul%2=0 AND NOT EXISTS(
     SELECT 1 FROM _synq_fklog_extra AS self
@@ -185,8 +180,7 @@ WHERE fklog.ul%2=0 AND NOT EXISTS(
         (self.ts > fklog.ts OR (self.ts = fklog.ts AND self.peer > fklog.peer))
 );
 
-DROP TRIGGER IF EXISTS  _synq_fklog_effective_insert;
-CREATE TRIGGER          _synq_fklog_effective_insert
+CREATE TRIGGER _synq_fklog_effective_insert
 INSTEAD OF INSERT ON _synq_fklog_effective WHEN (
     NEW.peer IS NULL AND NEW.ts IS NULL
 )
@@ -203,13 +197,12 @@ END;
 
 -- Debug-only and test-only tables/views
 
-CREATE TABLE IF NOT EXISTS _synq_names(
+CREATE TABLE _synq_names(
     id integer PRIMARY KEY,
     name text NOT NULL
 ) STRICT;
 
-DROP VIEW IF EXISTS _synq_id_debug;
-CREATE VIEW         _synq_id_debug AS
+CREATE VIEW _synq_id_debug AS
 SELECT id.row_ts, id.row_peer, id.tbl, tbl.name, undo.ul
 FROM _synq_id AS id
     LEFT JOIN _synq_id_undo AS undo USING(row_ts, row_peer)
@@ -249,7 +242,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
             else ""
         )
         table_synq_id = f"""
-        CREATE TABLE IF NOT EXISTS "_synq_id_{tbl_name}"(
+        CREATE TABLE "_synq_id_{tbl_name}"(
             {maybe_rowid_alias}
             row_ts integer NOT NULL,
             row_peer integer NOT NULL,
@@ -258,14 +251,12 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 ON DELETE RESTRICT ON UPDATE CASCADE
         ) STRICT;
 
-        DROP TRIGGER IF EXISTS "_synq_delete_{tbl_name}";
         CREATE TRIGGER "_synq_delete_{tbl_name}"
         AFTER DELETE ON "{tbl_name}" WHEN (SELECT NOT is_merging FROM _synq_local)
         BEGIN
             DELETE FROM "_synq_id_{tbl_name}" WHERE rowid = OLD.rowid;
         END;
 
-        DROP TRIGGER IF EXISTS "_synq_delete_id_{tbl_name}";
         CREATE TRIGGER "_synq_delete_id_{tbl_name}"
         AFTER DELETE ON "_synq_id_{tbl_name}"
         WHEN (SELECT NOT is_merging FROM _synq_local)
@@ -285,20 +276,18 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
         insertions = ""
         updates = ""
         triggers = ""
-        metadata = (
-            f"INSERT OR IGNORE INTO _synq_names VALUES({ids[tbl]}, '{tbl_name}');"
-        )
+        metadata = f"INSERT INTO _synq_names VALUES({ids[tbl]}, '{tbl_name}');"
         for cst in tbl.all_constraints():
             if cst.name is not None:
-                metadata += f"""INSERT OR IGNORE INTO _synq_names VALUES({ids[(tbl, cst)]}, '{cst.name}');"""
+                metadata += f"""INSERT INTO _synq_names VALUES({ids[(tbl, cst)]}, '{cst.name}');"""
         for col in replicated_cols:
             metadata += f"""
-            INSERT OR IGNORE INTO _synq_names VALUES({ids[(tbl, col)]}, '{col.name}');
+            INSERT INTO _synq_names VALUES({ids[(tbl, col)]}, '{col.name}');
             """
             for uniq in tbl_uniqueness:
                 if col.name in uniq.columns():
                     metadata += f"""
-                    INSERT OR REPLACE INTO _synq_uniqueness(field, tbl_index)
+                    INSERT INTO _synq_uniqueness(field, tbl_index)
                     VALUES({ids[(tbl, col)]}, {ids[(tbl, uniq)]});
                     """.rstrip()
             insertions += f"""
@@ -320,7 +309,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
             for uniq in tbl_uniqueness:
                 if any(col_name in uniq.columns() for col_name in fk.columns):
                     metadata += f"""
-                    INSERT OR REPLACE INTO _synq_uniqueness(field, tbl_index)
+                    INSERT INTO _synq_uniqueness(field, tbl_index)
                     VALUES({ids[(tbl, fk)]}, {ids[(tbl, uniq)]});
                     """.rstrip()
             foreign_tbl_name = fk.foreign_table.name[0]
@@ -339,7 +328,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 for ref_col, col in zip(referred_cols, fk.columns)
             )
             metadata += f"""
-            INSERT OR REPLACE INTO _synq_fk(field, foreign_index, on_delete, on_update)
+            INSERT INTO _synq_fk(field, foreign_index, on_delete, on_update)
             VALUES(
                 {ids[(tbl, fk)]}, {ids[(foreign_tbl, f_uniq)]},
                 {FK_ACTION[normalize_fk_action(fk.on_delete, conf)]},
@@ -382,7 +371,6 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 {fk_ins_up}
             """
         triggers += f"""
-        DROP TRIGGER IF EXISTS "_synq_log_insert_{tbl_name}";
         CREATE TRIGGER "_synq_log_insert_{tbl_name}"
         AFTER INSERT ON "{tbl_name}"
         WHEN (SELECT NOT is_merging FROM _synq_local)
@@ -409,7 +397,6 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
         ]
         if len(tracked_cols) > 0:
             triggers += f"""
-            DROP TRIGGER IF EXISTS "_synq_log_update_{tbl_name}";
             CREATE TRIGGER "_synq_log_update_{tbl_name}"
             AFTER UPDATE OF {','.join(tracked_cols)} ON "{tbl_name}"
             WHEN (SELECT NOT is_merging FROM _synq_local)
@@ -423,7 +410,6 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
         rowid_aliases = utils.rowid_aliases(tbl)
         if len(rowid_aliases) > 0:
             triggers += f"""
-            DROP TRIGGER IF EXISTS "_synq_log_update_rowid_{tbl_name}_rowid";
             CREATE TRIGGER "_synq_log_update_rowid_{tbl_name}_rowid"
             AFTER UPDATE OF {", ".join(rowid_aliases)} ON "{tbl_name}"
             BEGIN
@@ -463,7 +449,7 @@ def init(
         cursor.executescript(_CREATE_TABLES)
         cursor.executescript(_synq_triggers(tables, conf))
         if not conf.physical_clock:
-            cursor.execute(f"DROP TRIGGER IF EXISTS _synq_local_clock;")
+            cursor.execute(f"DROP TRIGGER _synq_local_clock;")
     _allocate_id(db, id=id)
 
 
