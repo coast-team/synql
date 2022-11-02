@@ -487,28 +487,21 @@ def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str) -> Non
 
 
 _PULL_EXTERN = """
--- update clock
-UPDATE _synq_local SET ts = max(
-    _synq_local.ts,
-    (SELECT max(ts) FROM extern._synq_context)
-) + 1;
+-- Update clock
+UPDATE _synq_local SET ts = max(_synq_local.ts, max(ctx.ts)) + 1
+FROM extern._synq_context AS ctx;
 
 -- Add missing peers in the context with a ts of 0
-INSERT OR IGNORE INTO _synq_context
-SELECT peer, 0 FROM extern._synq_context;
-
-INSERT OR IGNORE INTO extern._synq_context
-SELECT peer, 0 FROM _synq_context;
+INSERT OR IGNORE INTO _synq_context SELECT peer, 0 FROM extern._synq_context;
+INSERT OR IGNORE INTO extern._synq_context SELECT peer, 0 FROM _synq_context;
 
 -- Add new id and log entries
 INSERT INTO _synq_id
-SELECT ext_id.*
-FROM extern._synq_id AS ext_id JOIN _synq_context AS ctx
-    ON ext_id.row_ts > ctx.ts AND ext_id.row_peer = ctx.peer;
+SELECT id.* FROM extern._synq_id AS id JOIN _synq_context AS ctx
+    ON id.row_ts > ctx.ts AND id.row_peer = ctx.peer;
 
 INSERT INTO _synq_log
-SELECT log.*
-FROM extern._synq_log AS log JOIN _synq_context AS ctx
+SELECT log.* FROM extern._synq_log AS log JOIN _synq_context AS ctx
     ON log.ts > ctx.ts AND log.peer = ctx.peer;
 
 INSERT INTO _synq_fklog
@@ -516,21 +509,19 @@ SELECT fklog.*
 FROM extern._synq_fklog AS fklog JOIN _synq_context AS ctx
     ON fklog.ts > ctx.ts AND fklog.peer = ctx.peer;
 
-INSERT INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
-SELECT log.ts, log.peer, log.row_ts, log.row_peer, log.ul
-FROM extern._synq_id_undo AS log JOIN _synq_context AS ctx
+INSERT INTO _synq_id_undo
+SELECT log.* FROM extern._synq_id_undo AS log JOIN _synq_context AS ctx
     ON log.ts > ctx.ts AND log.peer = ctx.peer
 WHERE true  -- avoid parsing ambiguity
-ON CONFLICT(row_ts, row_peer)
+ON CONFLICT
 DO UPDATE SET ul = excluded.ul, ts = excluded.ts, peer = excluded.peer
 WHERE ul < excluded.ul;
 
-INSERT INTO _synq_undolog(ts, peer, obj_ts, obj_peer, ul)
-SELECT log.ts, log.peer, log.obj_ts, log.obj_peer, log.ul
-FROM extern._synq_undolog AS log JOIN _synq_context AS ctx
+INSERT INTO _synq_undolog
+SELECT log.* FROM extern._synq_undolog AS log JOIN _synq_context AS ctx
     ON log.ts > ctx.ts AND log.peer = ctx.peer
 WHERE true  -- avoid parsing ambiguity
-ON CONFLICT(obj_ts, obj_peer)
+ON CONFLICT
 DO UPDATE SET ul = excluded.ul, ts = excluded.ts, peer = excluded.peer
 WHERE ul < excluded.ul;
 """
@@ -663,8 +654,7 @@ WHERE fklog.on_delete = 2 AND fklog.row_ul%2 = 0;
 
 _MERGE_END = """
 -- Update context
-UPDATE _synq_context SET ts = ctx.ts
-FROM extern._synq_context AS ctx
+UPDATE _synq_context SET ts = ctx.ts FROM extern._synq_context AS ctx
 WHERE ctx.ts > _synq_context.ts AND _synq_context.peer = ctx.peer;
 
 UPDATE _synq_context SET ts = local.ts
