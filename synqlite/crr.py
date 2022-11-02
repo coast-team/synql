@@ -273,9 +273,6 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
             DO UPDATE SET ul = ul + 1, ts = excluded.ts, peer = excluded.peer;
         END;
         """
-        insertions = ""
-        updates = ""
-        triggers = ""
         metadata = f"INSERT INTO _synq_names VALUES({ids[tbl]}, '{tbl_name}');"
         for cst in tbl.all_constraints():
             if cst.name is not None:
@@ -290,21 +287,6 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                     INSERT INTO _synq_uniqueness(field, tbl_index)
                     VALUES({ids[(tbl, col)]}, {ids[(tbl, uniq)]});
                     """.rstrip()
-            insertions += f"""
-            INSERT INTO _synq_log(ts, peer, row_ts, row_peer, field, val)
-            SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, {ids[(tbl, col)]}, NEW."{col.name}"
-            FROM _synq_local AS local, (
-                SELECT * FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid
-            ) AS cur;
-            """.rstrip()
-            updates += f"""
-            INSERT INTO _synq_log(ts, peer, row_ts, row_peer, field, val)
-            SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, {ids[(tbl, col)]}, NEW."{col.name}"
-            FROM _synq_local AS local, (
-                SELECT * FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid
-            ) AS cur
-            WHERE OLD."{col.name}" IS NOT NEW."{col.name}";
-            """
         for fk in tbl.foreign_keys():
             for uniq in tbl_uniqueness:
                 if any(col_name in uniq.columns() for col_name in fk.columns):
@@ -312,20 +294,12 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                     INSERT INTO _synq_uniqueness(field, tbl_index)
                     VALUES({ids[(tbl, fk)]}, {ids[(tbl, uniq)]});
                     """.rstrip()
-            foreign_tbl_name = fk.foreign_table[0]
-            foreign_tbl = tables[foreign_tbl_name]
-            changed_values = " OR ".join(
-                f'OLD."{col_name}" IS NOT NEW."{col_name}"' for col_name in fk.columns
-            )
+            foreign_tbl = tables[fk.foreign_table[0]]
             referred_cols = sql.referred_columns(fk, tables)
             f_uniq = next(
                 f_uniq
                 for f_uniq in foreign_tbl.uniqueness()
                 if tuple(f_uniq.columns()) == referred_cols
-            )
-            new_referred_match = " AND ".join(
-                f'"{ref_col}" = NEW."{col}"'
-                for ref_col, col in zip(referred_cols, fk.columns)
             )
             metadata += f"""
             INSERT INTO _synq_fk(field, foreign_index, on_delete, on_update)
@@ -335,6 +309,46 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 {FK_ACTION[normalize_fk_action(fk.on_update, conf)]}
             );
             """
+        log_updates = ""
+        log_insertions = ""
+        if len(replicated_cols) > 0:
+            log_tuples = ", ".join(
+                f'({ids[(tbl, col)]}, NEW."{col.name}")' for col in replicated_cols
+            )
+            log_insertions += f"""
+            INSERT INTO _synq_log(ts, peer, row_ts, row_peer, field, val)
+            SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, tuples.*
+            FROM _synq_local AS local, "_synq_id_{tbl_name}" AS cur,
+                (VALUES {log_tuples}) AS tuples
+            WHERE cur.rowid = NEW.rowid;
+            """.strip()
+            log_changed_tuples = "UNION ALL".join(
+                f"""
+                SELECT {ids[(tbl, col)]}, NEW."{col.name}"
+                WHERE OLD."{col.name}" IS NOT NEW."{col.name}"
+                """
+                for col in replicated_cols
+            )
+            log_updates += f"""
+            INSERT INTO _synq_log(ts, peer, row_ts, row_peer, field, val)
+            SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, tuples.*
+            FROM _synq_local AS local, "_synq_id_{tbl_name}" AS cur,
+                ({log_changed_tuples}) AS tuples
+            WHERE cur.rowid = NEW.rowid;
+            """.strip()
+        fklog_updates = ""
+        fklog_insertions = ""
+        for fk in tbl.foreign_keys():
+            foreign_tbl_name = fk.foreign_table[0]
+            foreign_tbl = tables[foreign_tbl_name]
+            changed_values = " OR ".join(
+                f'OLD."{col_name}" IS NOT NEW."{col_name}"' for col_name in fk.columns
+            )
+            referred_cols = sql.referred_columns(fk, tables)
+            new_referred_match = " AND ".join(
+                f'"{ref_col}" = NEW."{col}"'
+                for ref_col, col in zip(referred_cols, fk.columns)
+            )
             fk_ins_up = f"""
                 UPDATE _synq_fklog SET
                     foreign_row_ts = target.row_ts,
@@ -349,7 +363,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 WHERE _synq_fklog.ts = local.ts AND _synq_fklog.peer = local.peer AND
                     _synq_fklog.field = {ids[(tbl, fk)]};
             """.strip()
-            insertions += f"""
+            fklog_insertions += f"""
                 -- Handle case where at least one col is NULL
                 INSERT INTO _synq_fklog(ts, peer, row_ts, row_peer, field)
                 SELECT
@@ -359,7 +373,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 ) AS cur;
                 {fk_ins_up}
             """.rstrip()
-            updates += f"""
+            fklog_updates += f"""
                 -- Handle case where at least one col is NULL
                 INSERT INTO _synq_fklog(ts, peer, row_ts, row_peer, field)
                 SELECT
@@ -370,7 +384,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 WHERE {changed_values};
                 {fk_ins_up}
             """
-        triggers += f"""
+        triggers = f"""
         CREATE TRIGGER "_synq_log_insert_{tbl_name}"
         AFTER INSERT ON "{tbl_name}"
         WHEN (SELECT NOT is_merging FROM _synq_local)
@@ -389,7 +403,8 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
 
             INSERT INTO _synq_id(row_ts, row_peer, tbl)
             SELECT ts, peer, {ids[tbl]} FROM _synq_local;
-            {insertions}
+            {log_insertions}
+            {fklog_insertions}
         END;
         """.rstrip()
         tracked_cols = [f'"{x.name}"' for x in replicated_cols] + [
@@ -404,7 +419,8 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 UPDATE _synq_local SET ts = ts + 1;
                 UPDATE _synq_context SET ts = _synq_local.ts
                 FROM _synq_local WHERE _synq_context.peer = _synq_local.peer;
-                {updates}
+                {log_updates}
+                {fklog_updates}
             END;
             """.rstrip()
         rowid_aliases = utils.rowid_aliases(tbl)
