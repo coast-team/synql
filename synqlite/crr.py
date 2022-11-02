@@ -317,10 +317,8 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
             )
             log_insertions += f"""
             INSERT INTO _synq_log(ts, peer, row_ts, row_peer, field, val)
-            SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, tuples.*
-            FROM _synq_local AS local, "_synq_id_{tbl_name}" AS cur,
-                (VALUES {log_tuples}) AS tuples
-            WHERE cur.rowid = NEW.rowid;
+            SELECT local.ts, local.peer, local.ts, local.peer, tuples.*
+            FROM _synq_local AS local, (VALUES {log_tuples}) AS tuples;
             """.strip()
             log_changed_tuples = "UNION ALL".join(
                 f"""
@@ -367,10 +365,8 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 -- Handle case where at least one col is NULL
                 INSERT INTO _synq_fklog(ts, peer, row_ts, row_peer, field)
                 SELECT
-                    local.ts, local.peer, cur.row_ts, cur.row_peer, {ids[(tbl, fk)]}
-                FROM _synq_local AS local, (
-                    SELECT * FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid
-                ) AS cur;
+                    local.ts, local.peer, local.ts, local.peer, {ids[(tbl, fk)]}
+                FROM _synq_local AS local;
                 {fk_ins_up}
             """.rstrip()
             fklog_updates += f"""
