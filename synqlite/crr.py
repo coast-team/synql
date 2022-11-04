@@ -45,32 +45,14 @@ SELECT sql FROM sqlite_master WHERE (type = 'table' OR type = 'index') AND
     name NOT LIKE 'sqlite_%' AND name NOT LIKE '_synq_%';
 """
 
-_CREATE_TABLES = """
-CREATE TABLE _synq_local(
-    id integer PRIMARY KEY DEFAULT 1 CHECK(id = 1),
-    peer integer NOT NULL DEFAULT 0,
-    ts integer NOT NULL DEFAULT 0 CHECK(ts >= 0),
-    is_merging integer NOT NULL DEFAULT 0 CHECK(is_merging & 1 = is_merging)
-) STRICT;
-INSERT INTO _synq_local DEFAULT VALUES;
-
--- use `UPDATE _synq_local SET ts = ts + 1` to refresh the hybrid logical clock
-CREATE TRIGGER          _synq_local_clock
-AFTER UPDATE OF ts ON _synq_local WHEN (OLD.ts + 1 = NEW.ts)
-BEGIN
-    UPDATE _synq_local SET ts = max(NEW.ts, CAST(
-        ((julianday('now') - julianday('1970-01-01')) * 86400.0 * 1000000.0) AS int
-            -- unix epoch in nano-seconds
-            -- https://www.sqlite.org/lang_datefunc.html#examples
-    ));
-END;
-
--- Causal context
+_CREATE_TABLE_CONTEXT = """-- Causal context
 CREATE TABLE _synq_context(
     peer integer PRIMARY KEY,
     ts integer NOT NULL DEFAULT 0 CHECK (ts >= 0)
 ) STRICT;
+"""
 
+_CREATE_REPLICATION_TABLES = """
 CREATE TABLE _synq_id(
     row_ts integer NOT NULL,
     row_peer integer NOT NULL REFERENCES _synq_context(peer) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -90,20 +72,6 @@ CREATE TABLE _synq_id_undo(
         ON DELETE CASCADE ON UPDATE CASCADE
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX _synq_id_undo_index_ts ON _synq_id_undo(peer, ts);
-
-CREATE TABLE _synq_uniqueness(
-    field integer NOT NULL,
-    tbl_index integer NOT NULL,
-    PRIMARY KEY(field, tbl_index)
-) STRICT;
-
-CREATE TABLE _synq_fk(
-    field integer PRIMARY KEY,
-    -- 0: CASCADE, 1: RESTRICT, 2: SET NULL
-    on_delete integer NOT NULL CHECK(on_delete BETWEEN 0 AND 2),
-    on_update integer NOT NULL CHECK(on_update BETWEEN 0 AND 2),
-    foreign_index integer NOT NULL
-) STRICT;
 
 CREATE TABLE _synq_log(
     ts integer NOT NULL CHECK(ts >= row_ts),
@@ -143,6 +111,41 @@ CREATE TABLE _synq_undolog(
     PRIMARY KEY(obj_ts DESC, obj_peer DESC)
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX _synq_undolog_ts ON _synq_undolog(peer, ts);
+"""
+
+_CREATE_LOCAL_TABLES_VIEWS = """
+CREATE TABLE _synq_local(
+    id integer PRIMARY KEY DEFAULT 1 CHECK(id = 1),
+    peer integer NOT NULL DEFAULT 0,
+    ts integer NOT NULL DEFAULT 0 CHECK(ts >= 0),
+    is_merging integer NOT NULL DEFAULT 0 CHECK(is_merging & 1 = is_merging)
+) STRICT;
+INSERT INTO _synq_local DEFAULT VALUES;
+
+-- use `UPDATE _synq_local SET ts = ts + 1` to refresh the hybrid logical clock
+CREATE TRIGGER          _synq_local_clock
+AFTER UPDATE OF ts ON _synq_local WHEN (OLD.ts + 1 = NEW.ts)
+BEGIN
+    UPDATE _synq_local SET ts = max(NEW.ts, CAST(
+        ((julianday('now') - julianday('1970-01-01')) * 86400.0 * 1000000.0) AS int
+            -- unix epoch in nano-seconds
+            -- https://www.sqlite.org/lang_datefunc.html#examples
+    ));
+END;
+
+CREATE TABLE _synq_uniqueness(
+    field integer NOT NULL,
+    tbl_index integer NOT NULL,
+    PRIMARY KEY(field, tbl_index)
+) STRICT;
+
+CREATE TABLE _synq_fk(
+    field integer PRIMARY KEY,
+    -- 0: CASCADE, 1: RESTRICT, 2: SET NULL
+    on_delete integer NOT NULL CHECK(on_delete BETWEEN 0 AND 2),
+    on_update integer NOT NULL CHECK(on_update BETWEEN 0 AND 2),
+    foreign_index integer NOT NULL
+) STRICT;
 
 CREATE VIEW _synq_log_extra AS
 SELECT log.*, ifnull(undo.ul, 0) AS ul, ifnull(tbl_undo.ul, 0) AS row_ul
@@ -269,7 +272,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
             SELECT local.ts, local.peer, OLD.row_ts, OLD.row_peer, 1
             FROM _synq_local AS local
             WHERE true  -- avoid parsing ambiguity
-            ON CONFLICT(row_ts, row_peer)
+            ON CONFLICT
             DO UPDATE SET ul = ul + 1, ts = excluded.ts, peer = excluded.peer;
         END;
         """
@@ -458,18 +461,52 @@ def init(
     sql_ar_schema = _get_schema(db)
     tables = sql.symbols(parse_schema(sql_ar_schema))
     with closing(db.cursor()) as cursor:
-        cursor.executescript(_CREATE_TABLES)
+        cursor.executescript(
+            _CREATE_TABLE_CONTEXT
+            + _CREATE_REPLICATION_TABLES
+            + _CREATE_LOCAL_TABLES_VIEWS
+        )
         cursor.executescript(_synq_triggers(tables, conf))
         if not conf.physical_clock:
             cursor.execute(f"DROP TRIGGER _synq_local_clock;")
     _allocate_id(db, id=id)
 
 
-def clone_to(
-    src: sqlite3.Connection, target: sqlite3.Connection, /, *, id: int | None = None
+def fingerprint(db: sqlite3.Connection, fp_path: pathlib.Path | str, /) -> None:
+    db.commit()
+    with sqlite3.connect(fp_path) as target, closing(target.cursor()) as cursor:
+        cursor.executescript(_CREATE_TABLE_CONTEXT)
+    script = f"""
+    ATTACH DATABASE '{fp_path}' AS extern;
+    INSERT INTO extern._synq_context SELECT * FROM _synq_context;
+    DETACH DATABASE extern;
+    """
+    db.executescript(script)
+
+
+def delta(
+    db: sqlite3.Connection,
+    fp_path: pathlib.Path | str,
+    delta_path: pathlib.Path | str,
+    /,
 ) -> None:
-    src.commit()
-    src.backup(target)
+    db.commit()
+    with sqlite3.connect(delta_path) as delta, closing(delta.cursor()) as cursor:
+        cursor.executescript(_CREATE_TABLE_CONTEXT + _CREATE_REPLICATION_TABLES)
+    script = f"""
+    ATTACH DATABASE '{fp_path}' AS fp;
+    ATTACH DATABASE '{delta_path}' AS delta;
+    INSERT INTO extern._synq_context SELECT * FROM _synq_context;
+    DETACH DATABASE delta;
+    DETACH DATABASE fp;
+    """
+
+
+def clone_to(
+    db: sqlite3.Connection, target: sqlite3.Connection, /, *, id: int | None = None
+) -> None:
+    db.commit()
+    db.backup(target)
     _allocate_id(target, id=id)
 
 
@@ -525,16 +562,14 @@ INSERT INTO _synq_id_undo
 SELECT log.* FROM extern._synq_id_undo AS log JOIN _synq_context AS ctx
     ON log.ts > ctx.ts AND log.peer = ctx.peer
 WHERE true  -- avoid parsing ambiguity
-ON CONFLICT
-DO UPDATE SET ul = excluded.ul, ts = excluded.ts, peer = excluded.peer
+ON CONFLICT DO UPDATE SET ul = excluded.ul, ts = excluded.ts, peer = excluded.peer
 WHERE ul < excluded.ul;
 
 INSERT INTO _synq_undolog
 SELECT log.* FROM extern._synq_undolog AS log JOIN _synq_context AS ctx
     ON log.ts > ctx.ts AND log.peer = ctx.peer
 WHERE true  -- avoid parsing ambiguity
-ON CONFLICT
-DO UPDATE SET ul = excluded.ul, ts = excluded.ts, peer = excluded.peer
+ON CONFLICT DO UPDATE SET ul = excluded.ul, ts = excluded.ts, peer = excluded.peer
 WHERE ul < excluded.ul;
 """
 
@@ -573,12 +608,10 @@ WHERE (
 
 
 -- B.2.. ON UPDATE CASCADE
-INSERT INTO _synq_fklog_effective(
-    row_ts, row_peer, field, foreign_row_ts, foreign_row_peer
-)
+INSERT INTO _synq_id_undo(ts, peer, row_ts, row_peer)
 SELECT
-    fklog.row_ts, fklog.row_peer, fklog.field, log.row_ts, log.row_peer
-FROM _synq_context AS ctx, extern._synq_context AS ectx,
+    local.ts, local.peer, fklog.row_ts, fklog.row_peer
+FROM _synq_local AS local, _synq_context AS ctx, extern._synq_context AS ectx,
     _synq_log_effective AS log JOIN _synq_uniqueness AS uniq USING(field), _synq_fklog_effective AS fklog
 WHERE (
     (log.ts > ctx.ts AND log.peer = ctx.peer AND fklog.ts > ectx.ts AND fklog.peer = ectx.peer) OR
@@ -587,7 +620,8 @@ WHERE (
     log.row_ts = fklog.foreign_row_ts AND
     log.row_peer = fklog.foreign_row_peer AND
     uniq.tbl_index = fklog.foreign_index
-) AND fklog.on_update = 0;
+) AND fklog.on_update = 0
+ON CONFLICT DO UPDATE SET ts = excluded.ts, peer = excluded.peer;
 
 -- B.3.. ON UPDATE SET NULL
 INSERT INTO _synq_fklog_effective(row_ts, row_peer, field)

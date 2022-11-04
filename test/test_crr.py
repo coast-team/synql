@@ -1280,24 +1280,24 @@ def test_concur_up_fk_cascade(tmp_path: pathlib.Path) -> None:
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
             tbls={"X": {(2, (1, 1))}, "Y": {(1, 2, (2, 2))}},
-            ctx={1: 4, 2: 2},
+            ctx={1: 3, 2: 2},
             log={
                 Val(ts=(1, 1), row=(1, 1), name="x", val=1),
                 Val(ts=(2, 1), row=(1, 1), name="x", val=2),
                 Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
-                Val(ts=(4, 1), row=(2, 2), name="fk", val=(1, 1)),
+                Undo(ts=(3, 1), obj=(2, 2), ul=0),
             },
         )
 
         crr.pull_from(b, tmp_path / "a.bak.db")
         assert crr_from(b) == Crr(
             tbls={"X": {(2, (1, 1))}, "Y": {(1, 2, (2, 2))}},
-            ctx={1: 2, 2: 4},
+            ctx={1: 2, 2: 3},
             log={
                 Val(ts=(1, 1), row=(1, 1), name="x", val=1),
                 Val(ts=(2, 1), row=(1, 1), name="x", val=2),
                 Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
-                Val(ts=(4, 2), row=(2, 2), name="fk", val=(1, 1)),
+                Undo(ts=(3, 2), obj=(2, 2), ul=0),
             },
         )
         exec(a, "PRAGMA integrity_check")
@@ -1368,30 +1368,30 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
             tbls={"X": {(2, (1, 1))}, "Y": {(2, (2, 2))}},
-            ctx={1: 5, 2: 3},
+            ctx={1: 4, 2: 3},
             log={
                 Val(ts=(1, 1), row=(1, 1), name="x", val=1),
                 Val(ts=(2, 1), row=(1, 1), name="x", val=2),
                 Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Val(ts=(3, 2), row=(3, 2), name="x", val=2),
                 Undo(ts=(4, 1), obj=(1, 1), ul=2),
-                Val(ts=(5, 1), row=(2, 2), name="fk", val=(1, 1)),
-                Undo(ts=(5, 1), obj=(3, 2), ul=1),
+                Undo(ts=(4, 1), obj=(3, 2), ul=1),
+                Undo(ts=(4, 1), obj=(2, 2), ul=0),
             },
         )
 
         crr.pull_from(b, tmp_path / "a.bak.db")
         assert crr_from(b) == Crr(
             tbls={"X": {(2, (1, 1))}, "Y": {(2, (2, 2))}},
-            ctx={1: 3, 2: 5},
+            ctx={1: 3, 2: 4},
             log={
                 Val(ts=(1, 1), row=(1, 1), name="x", val=1),
                 Val(ts=(2, 1), row=(1, 1), name="x", val=2),
                 Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
                 Val(ts=(3, 2), row=(3, 2), name="x", val=2),
                 Undo(ts=(4, 2), obj=(1, 1), ul=2),
-                Val(ts=(5, 2), row=(2, 2), name="fk", val=(1, 1)),
-                Undo(ts=(5, 2), obj=(3, 2), ul=1),
+                Undo(ts=(4, 2), obj=(3, 2), ul=1),
+                Undo(ts=(4, 2), obj=(2, 2), ul=0),
             },
         )
         exec(a, "PRAGMA integrity_check")
