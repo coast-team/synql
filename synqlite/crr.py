@@ -342,46 +342,49 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
         for fk in tbl.foreign_keys():
             foreign_tbl_name = fk.foreign_table[0]
             foreign_tbl = tables[foreign_tbl_name]
-            changed_values = " OR ".join(
-                f'OLD."{col_name}" IS NOT NEW."{col_name}"' for col_name in fk.columns
-            )
             referred_cols = sql.referred_columns(fk, tables)
             new_referred_match = " AND ".join(
                 f'"{ref_col}" = NEW."{col}"'
                 for ref_col, col in zip(referred_cols, fk.columns)
             )
-            fk_ins_up = f"""
-                UPDATE _synq_fklog SET
-                    foreign_row_ts = target.row_ts,
-                    foreign_row_peer = target.row_peer
+            fklog_insertions += f"""
+                -- Handle case where at least one col is NULL
+                INSERT INTO _synq_fklog(ts, peer, row_ts, row_peer, field, foreign_row_ts, foreign_row_peer)
+                SELECT
+                    local.ts, local.peer, local.ts, local.peer, {ids[(tbl, fk)]},
+                    target.row_ts, target.row_peer
+                FROM _synq_local AS local LEFT JOIN (
+                    SELECT row_ts, row_peer FROM "_synq_id_{foreign_tbl_name}"
+                    WHERE rowid = (
+                        SELECT rowid FROM "{foreign_tbl_name}"
+                        WHERE {new_referred_match}
+                    )
+                ) AS target;
+            """.rstrip()
+            fklog_updates += f"""
+                -- Handle case where at least one col is NULL
+                INSERT INTO _synq_fklog(ts, peer, row_ts, row_peer, field, foreign_row_ts, foreign_row_peer)
+                SELECT
+                    local.ts, local.peer, cur.row_ts, cur.row_peer, {ids[(tbl, fk)]},
+                    target.row_ts, target.row_peer
                 FROM _synq_local AS local, (
+                    SELECT * FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid
+                ) AS cur LEFT JOIN (
                     SELECT row_ts, row_peer FROM "_synq_id_{foreign_tbl_name}"
                     WHERE rowid = (
                         SELECT rowid FROM "{foreign_tbl_name}"
                         WHERE {new_referred_match}
                     )
                 ) AS target
-                WHERE _synq_fklog.ts = local.ts AND _synq_fklog.peer = local.peer AND
-                    _synq_fklog.field = {ids[(tbl, fk)]};
-            """.strip()
-            fklog_insertions += f"""
-                -- Handle case where at least one col is NULL
-                INSERT INTO _synq_fklog(ts, peer, row_ts, row_peer, field)
-                SELECT
-                    local.ts, local.peer, local.ts, local.peer, {ids[(tbl, fk)]}
-                FROM _synq_local AS local;
-                {fk_ins_up}
-            """.rstrip()
-            fklog_updates += f"""
-                -- Handle case where at least one col is NULL
-                INSERT INTO _synq_fklog(ts, peer, row_ts, row_peer, field)
-                SELECT
-                    local.ts, local.peer, cur.row_ts, cur.row_peer, {ids[(tbl, fk)]}
-                FROM _synq_local AS local, (
-                    SELECT * FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid
-                ) AS cur
-                WHERE {changed_values};
-                {fk_ins_up}
+                WHERE NOT EXISTS(
+                    SELECT 1 FROM (
+                        SELECT foreign_row_ts, foreign_row_peer FROM _synq_fklog
+                        WHERE row_ts = cur.row_ts AND row_peer = cur.row_peer AND
+                            field = {ids[(tbl, fk)]}
+                        ORDER BY ts, peer LIMIT 1
+                    )
+                    WHERE foreign_row_ts = target.row_ts AND foreign_row_peer = target.row_peer
+                );
             """
         triggers = f"""
         CREATE TRIGGER "_synq_log_insert_{tbl_name}"

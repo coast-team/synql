@@ -291,7 +291,6 @@ def test_fk_up_cascade(tmp_path: pathlib.Path) -> None:
             log={
                 Val(ts=(1, 1), row=(1, 1), name="x", val=1),
                 Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
-                Val(ts=(3, 1), row=(2, 1), name="fk", val=(1, 1)),
                 Val(ts=(4, 1), row=(1, 1), name="x", val=2),
             },
         )
