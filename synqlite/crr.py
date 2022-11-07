@@ -148,7 +148,7 @@ CREATE TABLE _synq_fk(
 ) STRICT;
 
 CREATE VIEW _synq_log_extra AS
-SELECT log.*, ifnull(undo.ul, 0) AS ul, ifnull(tbl_undo.ul, 0) AS row_ul
+SELECT log.*, ifnull(undo.ul, 0) AS ul, undo.ts AS ul_ts, undo.peer AS ul_peer, ifnull(tbl_undo.ul, 0) AS row_ul
 FROM _synq_log AS log
     LEFT JOIN _synq_id_undo AS tbl_undo
         USING(row_ts, row_peer)
@@ -164,7 +164,7 @@ WHERE log.ul%2 = 0 AND NOT EXISTS(
 );
 
 CREATE VIEW _synq_fklog_extra AS
-SELECT fklog.*, ifnull(undo.ul, 0) AS ul, ifnull(tbl_undo.ul, 0) AS row_ul,
+SELECT fklog.*, ifnull(undo.ul, 0) AS ul, undo.ts AS ul_ts, undo.peer AS ul_peer, ifnull(tbl_undo.ul, 0) AS row_ul,
     fk.on_update, fk.on_delete, fk.foreign_index
 FROM _synq_fklog AS fklog
     LEFT JOIN _synq_id_undo AS tbl_undo
@@ -609,24 +609,7 @@ WHERE (
     uniq.tbl_index = fklog.foreign_index
 ) AND fklog.on_update = 1 AND log.ul%2 = 0;
 
-
--- B.2.. ON UPDATE CASCADE
-INSERT INTO _synq_id_undo(ts, peer, row_ts, row_peer)
-SELECT
-    local.ts, local.peer, fklog.row_ts, fklog.row_peer
-FROM _synq_local AS local, _synq_context AS ctx, extern._synq_context AS ectx,
-    _synq_log_effective AS log JOIN _synq_uniqueness AS uniq USING(field), _synq_fklog_effective AS fklog
-WHERE (
-    (log.ts > ctx.ts AND log.peer = ctx.peer AND fklog.ts > ectx.ts AND fklog.peer = ectx.peer) OR
-    (log.ts > ectx.ts AND log.peer = ectx.peer AND fklog.ts > ctx.ts AND fklog.peer = ctx.peer)
-) AND (
-    log.row_ts = fklog.foreign_row_ts AND
-    log.row_peer = fklog.foreign_row_peer AND
-    uniq.tbl_index = fklog.foreign_index
-) AND fklog.on_update = 0
-ON CONFLICT DO UPDATE SET ts = excluded.ts, peer = excluded.peer;
-
--- B.3.. ON UPDATE SET NULL
+-- B.2. ON UPDATE SET NULL
 INSERT INTO _synq_fklog_effective(row_ts, row_peer, field)
 SELECT fklog.row_ts, fklog.row_peer, fklog.field
 FROM _synq_context AS ctx, extern._synq_context AS ectx,
@@ -792,17 +775,47 @@ def _create_pull(tables: sql.Symbols) -> str:
                             selectors += [f'({selector}) AS "{col_name}"']
         merger += f"""
         INSERT OR REPLACE INTO "{tbl_name}"({', '.join(col_names)})
+        WITH RECURSIVE _synq_unified_log AS (
+            SELECT
+            log.ts, log.peer, log.row_ts, log.row_peer, log.field,
+            log.val, NULL AS foreign_row_ts, NULL AS foreign_row_peer,
+            log.ul, log.ul_ts, log.ul_peer, log.row_ul
+            FROM _synq_log_effective AS log
+            UNION ALL
+            SELECT
+                fklog.ts, fklog.peer, fklog.row_ts, fklog.row_peer, fklog.field,
+                NULL AS val, fklog.foreign_row_ts, fklog.foreign_row_peer,
+                fklog.ul, fklog.ul_ts, fklog.ul_peer, fklog.row_ul
+            FROM _synq_fklog_effective AS fklog
+        ), _synq_cascade_refs(row_ts, row_peer, field) AS (
+            -- on update cascade triggered by extern updates OR undone updates
+            SELECT fklog.row_ts, fklog.row_peer, fklog.field
+            FROM _synq_context AS ctx, extern._synq_context AS ectx, _synq_unified_log AS log
+                JOIN _synq_uniqueness AS uniq USING(field)
+                JOIN _synq_fklog_effective AS fklog
+                    ON log.row_ts = fklog.foreign_row_ts AND
+                        log.row_peer = fklog.foreign_row_peer AND
+                        uniq.tbl_index = fklog.foreign_index
+            WHERE fklog.on_update = 0 AND fklog.row_ul%2 = 0 AND
+                ((log.peer = ctx.peer AND log.ts > ctx.ts) OR
+                (log.ul_peer = ctx.peer AND log.ul_ts > ctx.ts))
+            UNION
+            SELECT src.row_ts, src.row_peer, src.field
+            FROM _synq_cascade_refs AS target
+                JOIN _synq_uniqueness AS uniq USING(field)
+                JOIN _synq_fklog_effective AS src
+                    ON src.foreign_row_ts = target.row_ts AND
+                        src.foreign_row_peer = target.row_peer AND
+                        uniq.tbl_index = src.foreign_index
+            WHERE src.on_update = 0 AND src.row_ul%2 = 0
+        )
         SELECT {', '.join(selectors)} FROM (
             SELECT id.rowid, id.row_ts, id.row_peer FROM (
-                SELECT log.row_ts, log.row_peer FROM _synq_log_extra AS log
+                SELECT log.row_ts, log.row_peer FROM _synq_unified_log AS log
                     JOIN _synq_context AS ctx
-                        ON log.ul%2 = 0 AND log.peer = ctx.peer AND log.ts > ctx.ts
+                        ON (log.ul%2 = 0 AND log.peer = ctx.peer AND log.ts > ctx.ts) OR
+                            (log.ul%2 = 1 AND log.ul_peer = ctx.peer AND log.ul_ts > ctx.ts)
                 WHERE log.row_ul%2 = 0
-                UNION
-                SELECT fklog.row_ts, fklog.row_peer FROM _synq_fklog_extra AS fklog
-                    JOIN _synq_context AS ctx
-                        ON fklog.ul%2 = 0 AND fklog.peer = ctx.peer AND fklog.ts > ctx.ts
-                WHERE fklog.row_ul%2 = 0
                 UNION
                 SELECT redo.row_ts, redo.row_peer FROM _synq_id_undo AS redo
                     JOIN _synq_context AS ctx
@@ -815,6 +828,15 @@ def _create_pull(tables: sql.Symbols) -> str:
                     JOIN _synq_log AS log
                         ON undo.obj_ts = log.ts AND undo.obj_peer = log.peer
                 WHERE undo.ul%2 = 1
+                UNION
+                SELECT log.row_ts, log.row_peer FROM _synq_context AS ctx
+                    JOIN _synq_undolog AS undo
+                        ON undo.ts > ctx.ts AND undo.peer = ctx.peer
+                    JOIN _synq_fklog AS log
+                        ON undo.obj_ts = log.ts AND undo.obj_peer = log.peer
+                WHERE undo.ul%2 = 1
+                UNION
+                SELECT row_ts, row_peer FROM _synq_cascade_refs
             ) JOIN "_synq_id_{tbl_name}" AS id
                 USING(row_ts, row_peer)
             UNION
