@@ -316,7 +316,6 @@ def test_fk_up_set_null(tmp_path: pathlib.Path) -> None:
             log={
                 Val(ts=(1, 1), row=(1, 1), name="x", val=1),
                 Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
-                Val(ts=(3, 1), row=(2, 1), name="fk", val=(None, None)),
                 Val(ts=(4, 1), row=(1, 1), name="x", val=2),
             },
         )
@@ -1135,7 +1134,7 @@ def test_concur_del_fk_set_null(tmp_path: pathlib.Path) -> None:
         exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
         exec(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON DELETE SET NULL)",
+            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X ON DELETE SET NULL)",
         )
         crr.init(a, id=1, conf=_DEFAULT_CONF)
         exec(a, "INSERT INTO X VALUES(1)")
@@ -1147,22 +1146,62 @@ def test_concur_del_fk_set_null(tmp_path: pathlib.Path) -> None:
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
             tbls={"X": set(), "Y": {(1, None, (2, 2))}},
-            ctx={1: 4, 2: 2},
+            ctx={1: 2, 2: 2},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
                 Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
-                Val(ts=(4, 1), row=(2, 2), name="fk", val=(None, None)),
             },
         )
 
         crr.pull_from(b, tmp_path / "a.bak.db")
         assert crr_from(b) == Crr(
             tbls={"X": set(), "Y": {(1, None, (2, 2))}},
-            ctx={1: 2, 2: 4},
+            ctx={1: 2, 2: 2},
             log={
                 Undo(ts=(2, 1), obj=(1, 1), ul=1),
                 Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
-                Val(ts=(4, 2), row=(2, 2), name="fk", val=(None, None)),
+            },
+        )
+        exec(a, "PRAGMA integrity_check")
+
+
+def test_concur_del_fk_set_null_repl_col(tmp_path: pathlib.Path) -> None:
+    with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
+        tmp_path / "b.db"
+    ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
+        exec(a, "PRAGMA foreign_keys=ON")
+        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
+        exec(
+            a,
+            "CREATE TABLE Y(y integer PRIMARY KEY, x int CONSTRAINT fk REFERENCES X ON DELETE SET NULL)",
+        )
+        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        exec(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, id=2)
+        exec(a, "DELETE FROM X")
+        a.backup(a_bak)
+        exec(b, "INSERT INTO Y VALUES(1, 1)")
+
+        exec(a, "PRAGMA foreign_keys=OFF")
+        crr.pull_from(a, tmp_path / "b.db")
+        assert crr_from(a) == Crr(
+            tbls={"X": set(), "Y": {(1, None, (2, 2))}},
+            ctx={1: 2, 2: 2},
+            log={
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Undo(ts=(2, 1), obj=(1, 1), ul=1),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
+            },
+        )
+
+        crr.pull_from(b, tmp_path / "a.bak.db")
+        assert crr_from(b) == Crr(
+            tbls={"X": set(), "Y": {(1, None, (2, 2))}},
+            ctx={1: 2, 2: 2},
+            log={
+                Val(ts=(1, 1), row=(1, 1), name="x", val=1),
+                Undo(ts=(2, 1), obj=(1, 1), ul=1),
+                Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
             },
         )
         exec(a, "PRAGMA integrity_check")

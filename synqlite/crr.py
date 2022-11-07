@@ -343,8 +343,16 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
             foreign_tbl_name = fk.foreign_table[0]
             foreign_tbl = tables[foreign_tbl_name]
             referred_cols = sql.referred_columns(fk, tables)
+            old_referred_match = " AND ".join(
+                f'"{ref_col}" = OLD."{col}"'
+                for ref_col, col in zip(referred_cols, fk.columns)
+            )
             new_referred_match = " AND ".join(
                 f'"{ref_col}" = NEW."{col}"'
+                for ref_col, col in zip(referred_cols, fk.columns)
+            )
+            null_ref_match = " AND ".join(
+                f'NEW."{col}" IS NULL'
                 for ref_col, col in zip(referred_cols, fk.columns)
             )
             fklog_insertions += f"""
@@ -377,6 +385,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                     )
                 ) AS target
                 WHERE NOT EXISTS(
+                    -- is ON UPDATE CASCADE?
                     SELECT 1 FROM (
                         SELECT foreign_row_ts, foreign_row_peer FROM _synq_fklog
                         WHERE row_ts = cur.row_ts AND row_peer = cur.row_peer AND
@@ -384,6 +393,12 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                         ORDER BY ts, peer LIMIT 1
                     )
                     WHERE foreign_row_ts = target.row_ts AND foreign_row_peer = target.row_peer
+                ) AND (
+                    -- is not ON DELETE SET NULL?
+                    NOT ({null_ref_match}) OR EXISTS(
+                        SELECT 1 FROM "{foreign_tbl_name}"
+                        WHERE {old_referred_match}
+                    )
                 );
             """
         triggers = f"""
@@ -675,13 +690,6 @@ WITH RECURSIVE _synq_dangling_refs(row_ts, row_peer, row_ul) AS (
 SELECT local.ts, local.peer, row_ts, row_peer, row_ul+1
 FROM _synq_local AS local, _synq_dangling_refs
 WHERE row_ul%2 = 0;
-
--- E. ON DELETE SET NULL
-INSERT INTO _synq_fklog_effective(row_ts, row_peer, field)
-SELECT fklog.row_ts, fklog.row_peer, fklog.field
-FROM _synq_fklog_effective AS fklog JOIN _synq_id_undo AS undo
-    ON fklog.foreign_row_ts = undo.row_ts AND fklog.foreign_row_peer = undo.row_peer
-WHERE fklog.on_delete = 2 AND fklog.row_ul%2 = 0;
 """
 
 _MERGE_END = """
@@ -732,7 +740,8 @@ def _create_pull(tables: sql.Symbols) -> str:
                     selector = f"""
                     SELECT fklog.* FROM _synq_fklog_extra AS fklog
                     WHERE fklog.field = {ids[(tbl, fk)]} AND fklog.ul%2 = 0 AND
-                        fklog.row_peer = id.row_peer AND fklog.row_ts = id.row_ts
+                        fklog.row_peer = id.row_peer AND fklog.row_ts = id.row_ts AND
+                        fklog.row_ul%2 = 0
                     ORDER BY fklog.ts DESC, fklog.peer DESC LIMIT 1
                     """
                     referred_tbl = tables[fk.foreign_table[0]]
@@ -746,6 +755,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                                     fklog2.ul%2 = 0 AND
                                     fklog.foreign_row_peer = fklog2.row_peer AND
                                     fklog.foreign_row_ts = fklog2.row_ts
+                            WHERE fklog2.row_ul%2 = 0
                             ORDER BY fklog.ts DESC, fklog.peer DESC LIMIT 1
                             """
                             referred_tbl = tables[referred.foreign_table[0]]
@@ -770,6 +780,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                                     ON log.row_peer = fklog.foreign_row_peer AND
                                         log.row_ts = fklog.foreign_row_ts AND
                                         log.field = {ids[(referred_tbl, ref_col)]} AND log.ul%2 = 0
+                                WHERE log.row_ul%2 = 0
                                 ORDER BY log.ts DESC, log.peer DESC LIMIT 1
                                 """
                             selectors += [f'({selector}) AS "{col_name}"']
@@ -837,6 +848,12 @@ def _create_pull(tables: sql.Symbols) -> str:
                 WHERE undo.ul%2 = 1
                 UNION
                 SELECT row_ts, row_peer FROM _synq_cascade_refs
+                UNION
+                SELECT fklog.row_ts, fklog.row_peer FROM _synq_fklog_extra AS fklog
+                    JOIN _synq_id_undo AS undo
+                        ON fklog.foreign_row_peer = undo.row_peer AND
+                            fklog.foreign_row_ts = undo.row_ts
+                WHERE undo.ul%2 = 1 AND fklog.on_delete = 2
             ) JOIN "_synq_id_{tbl_name}" AS id
                 USING(row_ts, row_peer)
             UNION
