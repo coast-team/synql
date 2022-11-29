@@ -674,7 +674,7 @@ WHERE (
     (log.ts > ectx.ts AND log.peer = ectx.peer AND self.ts > ctx.ts AND self.peer = ctx.peer)
 )
 GROUP BY log.row_ts, log.row_peer, self.row_ts, self.row_peer, uniq.tbl_index
-HAVING count(*) >= (
+HAVING count(DISTINCT log.field) >= (
     SELECT count(DISTINCT field) FROM _synq_uniqueness WHERE tbl_index = uniq.tbl_index
 );
 
