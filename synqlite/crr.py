@@ -592,7 +592,22 @@ WHERE ul < excluded.ul;
 """
 
 _CONFLICT_RESOLUTION = f"""
--- A. ON DELETE RESTRICT
+-- A. ON UPDATE RESTRICT
+-- undo all concurrent updates to a restrict ref
+INSERT OR REPLACE INTO _synq_undolog(ts, peer, obj_peer, obj_ts, ul)
+SELECT local.ts, local.peer, log.peer, log.ts, log.ul + 1
+FROM _synq_local AS local, _synq_context AS ctx, extern._synq_context AS ectx,
+    _synq_log_extra AS log JOIN _synq_uniqueness AS uniq USING(field), _synq_fklog_effective AS fklog
+WHERE (
+    (log.ts > ctx.ts AND log.peer = ctx.peer AND fklog.ts > ectx.ts AND fklog.peer = ectx.peer) OR
+    (log.ts > ectx.ts AND log.peer = ectx.peer AND fklog.ts > ctx.ts AND fklog.peer = ctx.peer)
+) AND (
+    log.row_ts = fklog.foreign_row_ts AND
+    log.row_peer = fklog.foreign_row_peer AND
+    uniq.tbl_index = fklog.foreign_index
+) AND fklog.on_update = 1 AND log.ul%2 = 0;
+
+-- B. ON DELETE RESTRICT
 INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
 WITH RECURSIVE _synq_restrict_refs(foreign_row_ts, foreign_row_peer) AS (
     SELECT foreign_row_ts, foreign_row_peer
@@ -609,23 +624,7 @@ FROM _synq_local AS local, _synq_restrict_refs JOIN _synq_id_undo
     ON foreign_row_ts = row_ts AND foreign_row_peer = row_peer
 WHERE ul%2 = 1;
 
--- B. ON UPDATE
--- B.1. ON UPDATE RESTRICT
--- undo all concurrent updates to a restrict ref
-INSERT OR REPLACE INTO _synq_undolog(ts, peer, obj_peer, obj_ts, ul)
-SELECT local.ts, local.peer, log.peer, log.ts, log.ul + 1
-FROM _synq_local AS local, _synq_context AS ctx, extern._synq_context AS ectx,
-    _synq_log_extra AS log JOIN _synq_uniqueness AS uniq USING(field), _synq_fklog_effective AS fklog
-WHERE (
-    (log.ts > ctx.ts AND log.peer = ctx.peer AND fklog.ts > ectx.ts AND fklog.peer = ectx.peer) OR
-    (log.ts > ectx.ts AND log.peer = ectx.peer AND fklog.ts > ctx.ts AND fklog.peer = ctx.peer)
-) AND (
-    log.row_ts = fklog.foreign_row_ts AND
-    log.row_peer = fklog.foreign_row_peer AND
-    uniq.tbl_index = fklog.foreign_index
-) AND fklog.on_update = 1 AND log.ul%2 = 0;
-
--- B.2. ON UPDATE SET NULL
+-- C. ON UPDATE SET NULL
 INSERT INTO _synq_fklog_effective(row_ts, row_peer, field)
 SELECT fklog.row_ts, fklog.row_peer, fklog.field
 FROM _synq_context AS ctx, extern._synq_context AS ectx,
@@ -639,7 +638,7 @@ WHERE (
     uniq.tbl_index = fklog.foreign_index
 ) AND fklog.on_update = 2;
 
--- C. resolve uniqueness conflicts
+-- D. resolve uniqueness conflicts
 -- undo latest rows with conflicting unique keys
 INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
 WITH _synq_unified_log_effective AS (
@@ -675,7 +674,7 @@ HAVING count(*) >= (
     SELECT count(DISTINCT field) FROM _synq_uniqueness WHERE tbl_index = uniq.tbl_index
 );
 
--- D. ON DELETE CASCADE
+-- E. ON DELETE CASCADE
 INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
 WITH RECURSIVE _synq_dangling_refs(row_ts, row_peer, row_ul) AS (
     SELECT fklog.row_ts, fklog.row_peer, fklog.row_ul
