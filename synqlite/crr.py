@@ -669,10 +669,12 @@ WHERE (
     log.row_ts > self.row_ts OR (
         log.row_ts = self.row_ts AND log.row_peer > self.row_peer
     )
-) AND (
-    (log.ts > ctx.ts AND log.peer = ctx.peer AND self.ts > ectx.ts AND self.peer = ectx.peer) OR
-    (log.ts > ectx.ts AND log.peer = ectx.peer AND self.ts > ctx.ts AND self.peer = ctx.peer)
 )
+-- AND (
+--      -- FIXME: Should also take ul_ts, ul_peer, row_ul_ts, row_ul_peer into account
+--     (log.ts > ctx.ts AND log.peer = ctx.peer AND self.ts > ectx.ts AND self.peer = ectx.peer) OR
+--     (log.ts > ectx.ts AND log.peer = ectx.peer AND self.ts > ctx.ts AND self.peer = ctx.peer)
+-- )
 GROUP BY log.row_ts, log.row_peer, self.row_ts, self.row_peer, uniq.tbl_index
 HAVING count(DISTINCT log.field) >= (
     SELECT count(DISTINCT field) FROM _synq_uniqueness WHERE tbl_index = uniq.tbl_index
