@@ -602,6 +602,7 @@ WITH RECURSIVE _synq_restrict_refs(foreign_row_ts, foreign_row_peer) AS (
     SELECT target.foreign_row_ts, target.foreign_row_peer
     FROM _synq_restrict_refs AS src JOIN _synq_fklog_effective AS target
         ON src.foreign_row_ts = target.row_ts AND src.foreign_row_peer = target.row_peer
+    WHERE on_delete = 0
 )
 SELECT local.ts, local.peer, row_ts, row_peer, ul + 1
 FROM _synq_local AS local, _synq_restrict_refs JOIN _synq_id_undo
