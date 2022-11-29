@@ -603,6 +603,7 @@ SELECT local.ts, local.peer, log.peer, log.ts, log.ul + 1
 FROM _synq_local AS local, _synq_context AS ctx, extern._synq_context AS ectx,
     _synq_log_extra AS log JOIN _synq_uniqueness AS uniq USING(field), _synq_fklog_effective AS fklog
 WHERE (
+    log.ts > fklog.ts OR (log.ts = fklog.ts AND log.peer = fklog.peer) OR
     (log.ts > ctx.ts AND log.peer = ctx.peer AND fklog.ts > ectx.ts AND fklog.peer = ectx.peer) OR
     (log.ts > ectx.ts AND log.peer = ectx.peer AND fklog.ts > ctx.ts AND fklog.peer = ctx.peer)
 ) AND (
