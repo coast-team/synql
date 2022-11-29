@@ -148,7 +148,9 @@ CREATE TABLE _synq_fk(
 ) STRICT;
 
 CREATE VIEW _synq_log_extra AS
-SELECT log.*, ifnull(undo.ul, 0) AS ul, undo.ts AS ul_ts, undo.peer AS ul_peer, ifnull(tbl_undo.ul, 0) AS row_ul
+SELECT log.*,
+    ifnull(undo.ul, 0) AS ul, undo.ts AS ul_ts, undo.peer AS ul_peer,
+    ifnull(tbl_undo.ul, 0) AS row_ul, tbl_undo.ts AS row_ul_ts, tbl_undo.peer AS row_ul_peer
 FROM _synq_log AS log
     LEFT JOIN _synq_id_undo AS tbl_undo
         USING(row_ts, row_peer)
@@ -164,7 +166,9 @@ WHERE log.ul%2 = 0 AND NOT EXISTS(
 );
 
 CREATE VIEW _synq_fklog_extra AS
-SELECT fklog.*, ifnull(undo.ul, 0) AS ul, undo.ts AS ul_ts, undo.peer AS ul_peer, ifnull(tbl_undo.ul, 0) AS row_ul,
+SELECT fklog.*,
+    ifnull(undo.ul, 0) AS ul, undo.ts AS ul_ts, undo.peer AS ul_peer,
+    ifnull(tbl_undo.ul, 0) AS row_ul, tbl_undo.ts AS row_ul_ts, tbl_undo.peer AS row_ul_peer,
     fk.on_update, fk.on_delete, fk.foreign_index
 FROM _synq_fklog AS fklog
     LEFT JOIN _synq_id_undo AS tbl_undo
