@@ -643,8 +643,8 @@ WHERE (
 INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
 WITH _synq_unified_log_effective AS (
     SELECT
-    log.ts, log.peer, log.row_ts, log.row_peer, log.field,
-    log.val, NULL AS foreign_row_ts, NULL AS foreign_row_peer, log.row_ul
+        log.ts, log.peer, log.row_ts, log.row_peer, log.field,
+        log.val, NULL AS foreign_row_ts, NULL AS foreign_row_peer, log.row_ul
     FROM _synq_log_effective AS log
     UNION ALL
     SELECT
