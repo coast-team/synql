@@ -5,7 +5,7 @@ import logging
 import pathlib
 import textwrap
 import pysqlite3 as sqlite3
-from synqlite import sqlschm_utils as utils
+from synql import sqlschm_utils as utils
 from dataclasses import dataclass
 from typing import Literal
 
@@ -36,44 +36,44 @@ def normalize_fk_action(
         else:
             return sql.OnUpdateDelete.RESTRICT
     elif action is sql.OnUpdateDelete.SET_DEFAULT:
-        raise Exception("SynQLite does not support On DELETE/UPDATE SET DEFAULT")
+        raise Exception("synql does not support On DELETE/UPDATE SET DEFAULT")
     return action
 
 
 _SELECT_AR_TABLE_SCHEMA = """--sql
 SELECT sql FROM sqlite_master WHERE (type = 'table' OR type = 'index') AND
-    name NOT LIKE 'sqlite_%' AND name NOT LIKE '_synq_%';
+    name NOT LIKE 'sqlite_%' AND name NOT LIKE '_synql_%';
 """
 
 _CREATE_TABLE_CONTEXT = """-- Causal context
-CREATE TABLE _synq_context(
+CREATE TABLE _synql_context(
     peer integer PRIMARY KEY,
     ts integer NOT NULL DEFAULT 0 CHECK (ts >= 0)
 ) STRICT;
 """
 
 _CREATE_REPLICATION_TABLES = """
-CREATE TABLE _synq_id(
+CREATE TABLE _synql_id(
     row_ts integer NOT NULL,
-    row_peer integer NOT NULL REFERENCES _synq_context(peer) ON DELETE CASCADE ON UPDATE CASCADE,
+    row_peer integer NOT NULL REFERENCES _synql_context(peer) ON DELETE CASCADE ON UPDATE CASCADE,
     tbl integer NOT NULL,
     PRIMARY KEY(row_ts DESC, row_peer DESC),
     UNIQUE(row_peer, row_ts)
 ) STRICT, WITHOUT ROWID;
 
-CREATE TABLE _synq_id_undo(
+CREATE TABLE _synql_id_undo(
     row_ts integer NOT NULL,
     row_peer integer NOT NULL,
     ul integer NOT NULL DEFAULT 0 CHECK(ul >= 0), -- undo length
     ts integer NOT NULL CHECK(ts >= row_ts),
     peer integer NOT NULL,
     PRIMARY KEY(row_ts DESC, row_peer DESC),
-    FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
+    FOREIGN KEY(row_ts, row_peer) REFERENCES _synql_id(row_ts, row_peer)
         ON DELETE CASCADE ON UPDATE CASCADE
 ) STRICT, WITHOUT ROWID;
-CREATE INDEX _synq_id_undo_index_ts ON _synq_id_undo(peer, ts);
+CREATE INDEX _synql_id_undo_index_ts ON _synql_id_undo(peer, ts);
 
-CREATE TABLE _synq_log(
+CREATE TABLE _synql_log(
     ts integer NOT NULL CHECK(ts >= row_ts),
     peer integer NOT NULL,
     row_ts integer NOT NULL,
@@ -81,12 +81,12 @@ CREATE TABLE _synq_log(
     field integer NOT NULL,
     val any,
     PRIMARY KEY(row_ts, row_peer, field, ts, peer),
-    FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
+    FOREIGN KEY(row_ts, row_peer) REFERENCES _synql_id(row_ts, row_peer)
         ON DELETE CASCADE ON UPDATE CASCADE
 ) STRICT;
-CREATE INDEX _synq_log_index_ts ON _synq_log(peer, ts);
+CREATE INDEX _synql_log_index_ts ON _synql_log(peer, ts);
 
-CREATE TABLE _synq_fklog(
+CREATE TABLE _synql_fklog(
     ts integer NOT NULL CHECK(ts >= row_ts),
     peer integer NOT NULL,
     row_ts integer NOT NULL,
@@ -95,14 +95,14 @@ CREATE TABLE _synq_fklog(
     foreign_row_ts integer DEFAULT NULL,
     foreign_row_peer integer DEFAULT NULL,
     PRIMARY KEY(row_ts, row_peer, field, ts, peer),
-    FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
+    FOREIGN KEY(row_ts, row_peer) REFERENCES _synql_id(row_ts, row_peer)
         ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY(foreign_row_ts, foreign_row_peer) REFERENCES _synq_id(row_ts, row_peer)
+    FOREIGN KEY(foreign_row_ts, foreign_row_peer) REFERENCES _synql_id(row_ts, row_peer)
         ON DELETE NO ACTION ON UPDATE CASCADE
 ) STRICT;
-CREATE INDEX _synq_fklog_index_ts ON _synq_fklog(peer, ts);
+CREATE INDEX _synql_fklog_index_ts ON _synql_fklog(peer, ts);
 
-CREATE TABLE _synq_undolog(
+CREATE TABLE _synql_undolog(
     obj_ts integer NOT NULL,
     obj_peer integer NOT NULL,
     ul integer NOT NULL DEFAULT 0 CHECK(ul >= 0), -- undo length
@@ -110,36 +110,36 @@ CREATE TABLE _synq_undolog(
     peer integer NOT NULL,
     PRIMARY KEY(obj_ts DESC, obj_peer DESC)
 ) STRICT, WITHOUT ROWID;
-CREATE INDEX _synq_undolog_ts ON _synq_undolog(peer, ts);
+CREATE INDEX _synql_undolog_ts ON _synql_undolog(peer, ts);
 """
 
 _CREATE_LOCAL_TABLES_VIEWS = """
-CREATE TABLE _synq_local(
+CREATE TABLE _synql_local(
     id integer PRIMARY KEY DEFAULT 1 CHECK(id = 1),
     peer integer NOT NULL DEFAULT 0,
     ts integer NOT NULL DEFAULT 0 CHECK(ts >= 0),
     is_merging integer NOT NULL DEFAULT 0 CHECK(is_merging & 1 = is_merging)
 ) STRICT;
-INSERT INTO _synq_local DEFAULT VALUES;
+INSERT INTO _synql_local DEFAULT VALUES;
 
--- use `UPDATE _synq_local SET ts = ts + 1` to refresh the hybrid logical clock
-CREATE TRIGGER          _synq_local_clock
-AFTER UPDATE OF ts ON _synq_local WHEN (OLD.ts + 1 = NEW.ts)
+-- use `UPDATE _synql_local SET ts = ts + 1` to refresh the hybrid logical clock
+CREATE TRIGGER          _synql_local_clock
+AFTER UPDATE OF ts ON _synql_local WHEN (OLD.ts + 1 = NEW.ts)
 BEGIN
-    UPDATE _synq_local SET ts = max(NEW.ts, CAST(
+    UPDATE _synql_local SET ts = max(NEW.ts, CAST(
         ((julianday('now') - julianday('1970-01-01')) * 86400.0 * 1000000.0) AS int
             -- unix epoch in nano-seconds
             -- https://www.sqlite.org/lang_datefunc.html#examples
     ));
 END;
 
-CREATE TABLE _synq_uniqueness(
+CREATE TABLE _synql_uniqueness(
     field integer NOT NULL,
     tbl_index integer NOT NULL,
     PRIMARY KEY(field, tbl_index)
 ) STRICT;
 
-CREATE TABLE _synq_fk(
+CREATE TABLE _synql_fk(
     field integer PRIMARY KEY,
     -- 0: CASCADE, 1: RESTRICT, 2: SET NULL
     on_delete integer NOT NULL CHECK(on_delete BETWEEN 0 AND 2),
@@ -147,77 +147,77 @@ CREATE TABLE _synq_fk(
     foreign_index integer NOT NULL
 ) STRICT;
 
-CREATE VIEW _synq_log_extra AS
+CREATE VIEW _synql_log_extra AS
 SELECT log.*,
     ifnull(undo.ul, 0) AS ul, undo.ts AS ul_ts, undo.peer AS ul_peer,
     ifnull(tbl_undo.ul, 0) AS row_ul, tbl_undo.ts AS row_ul_ts, tbl_undo.peer AS row_ul_peer
-FROM _synq_log AS log
-    LEFT JOIN _synq_id_undo AS tbl_undo
+FROM _synql_log AS log
+    LEFT JOIN _synql_id_undo AS tbl_undo
         USING(row_ts, row_peer)
-    LEFT JOIN _synq_undolog AS undo
+    LEFT JOIN _synql_undolog AS undo
         ON log.ts = undo.obj_ts AND log.peer = undo.obj_peer;
 
-CREATE VIEW _synq_log_effective AS
-SELECT log.* FROM _synq_log_extra AS log
+CREATE VIEW _synql_log_effective AS
+SELECT log.* FROM _synql_log_extra AS log
 WHERE log.ul%2 = 0 AND NOT EXISTS(
-    SELECT 1 FROM _synq_log_extra AS self
+    SELECT 1 FROM _synql_log_extra AS self
     WHERE self.row_ts = log.row_ts AND self.row_peer = log.row_peer AND self.field = log.field AND
         (self.ts > log.ts OR (self.ts = log.ts AND self.peer > log.peer)) AND self.ul%2 = 0
 );
 
-CREATE VIEW _synq_fklog_extra AS
+CREATE VIEW _synql_fklog_extra AS
 SELECT fklog.*,
     ifnull(undo.ul, 0) AS ul, undo.ts AS ul_ts, undo.peer AS ul_peer,
     ifnull(tbl_undo.ul, 0) AS row_ul, tbl_undo.ts AS row_ul_ts, tbl_undo.peer AS row_ul_peer,
     fk.on_update, fk.on_delete, fk.foreign_index
-FROM _synq_fklog AS fklog
-    LEFT JOIN _synq_id_undo AS tbl_undo
+FROM _synql_fklog AS fklog
+    LEFT JOIN _synql_id_undo AS tbl_undo
         USING(row_ts, row_peer)
-    LEFT JOIN _synq_undolog AS undo
+    LEFT JOIN _synql_undolog AS undo
         ON fklog.ts = undo.obj_ts AND fklog.peer = undo.obj_peer
-    LEFT JOIN _synq_fk AS fk
+    LEFT JOIN _synql_fk AS fk
         USING(field);
 
-CREATE VIEW _synq_fklog_effective AS
-SELECT fklog.* FROM _synq_fklog_extra AS fklog
+CREATE VIEW _synql_fklog_effective AS
+SELECT fklog.* FROM _synql_fklog_extra AS fklog
 WHERE fklog.ul%2=0 AND NOT EXISTS(
-    SELECT 1 FROM _synq_fklog_extra AS self
+    SELECT 1 FROM _synql_fklog_extra AS self
     WHERE self.ul%2=0 AND
         self.row_ts = fklog.row_ts AND self.row_peer = fklog.row_peer AND self.field = fklog.field AND
         (self.ts > fklog.ts OR (self.ts = fklog.ts AND self.peer > fklog.peer))
 );
 
-CREATE TRIGGER _synq_fklog_effective_insert
-INSTEAD OF INSERT ON _synq_fklog_effective WHEN (
+CREATE TRIGGER _synql_fklog_effective_insert
+INSTEAD OF INSERT ON _synql_fklog_effective WHEN (
     NEW.peer IS NULL AND NEW.ts IS NULL
 )
 BEGIN
-    UPDATE _synq_local SET ts = ts + 1;
+    UPDATE _synql_local SET ts = ts + 1;
 
-    INSERT INTO _synq_fklog(
+    INSERT INTO _synql_fklog(
         ts, peer, row_ts, row_peer, field,
         foreign_row_ts, foreign_row_peer
     ) SELECT local.ts, local.peer, NEW.row_ts, NEW.row_peer, NEW.field,
         NEW.foreign_row_ts, NEW.foreign_row_peer
-    FROM _synq_local AS local;
+    FROM _synql_local AS local;
 END;
 
 -- Debug-only and test-only tables/views
 
-CREATE TABLE _synq_names(
+CREATE TABLE _synql_names(
     id integer PRIMARY KEY,
     name text NOT NULL
 ) STRICT;
 
-CREATE VIEW _synq_id_debug AS
+CREATE VIEW _synql_id_debug AS
 SELECT id.row_ts, id.row_peer, id.tbl, tbl.name, undo.ul
-FROM _synq_id AS id
-    LEFT JOIN _synq_id_undo AS undo USING(row_ts, row_peer)
-    LEFT JOIN _synq_names AS tbl ON tbl = id;
+FROM _synql_id AS id
+    LEFT JOIN _synql_id_undo AS undo USING(row_ts, row_peer)
+    LEFT JOIN _synql_names AS tbl ON tbl = id;
 """
 
 
-def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
+def _synql_triggers(tables: sql.Symbols, conf: Config) -> str:
     # FIXME: We do not support schema where:
     # - tables that reuse the name rowid
     # - without rowid tables (that's fine)
@@ -231,16 +231,16 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
         replicated_cols = tuple(utils.replicated_columns(tbl))
         # we use a dot (peer, ts) to globally and uniquely identify an object.
         # An object is either a row or a log entry.
-        # _synq_id_{tbl} contains a mapping between rows (rowid) and their id (dot)
+        # _synql_id_{tbl} contains a mapping between rows (rowid) and their id (dot)
         # We use the primary key of the table as a way to locally identify a row.
         # In SQLITE ROWID tables have an implicit rowid column as real primary key.
         # To simplify, we only support ROWID tables.
         # We assume that rowid refers to the rowid column or an alias of that
         # (any INTEGER PRIMARY KEY).
         # We do not support the case where rowid is used to designate another col.
-        # _synq_id_{tbl} explicitly declares rowid when {tbl} aliases rowid.
+        # _synql_id_{tbl} explicitly declares rowid when {tbl} aliases rowid.
         # This enables to exhibit consistent behavior upon database vacuum,
-        # and so to keep rowid correspondence between {tbl} and _synq_id_{tbl}.
+        # and so to keep rowid correspondence between {tbl} and _synql_id_{tbl}.
         pk = tbl.primary_key()
         maybe_autoinc = " AUTOINCREMENT" if pk is not None and pk.autoincrement else ""
         maybe_rowid_alias = (
@@ -248,57 +248,57 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
             if utils.has_rowid_alias(tbl)
             else ""
         )
-        table_synq_id = f"""
-        CREATE TABLE "_synq_id_{tbl_name}"(
+        table_synql_id = f"""
+        CREATE TABLE "_synql_id_{tbl_name}"(
             {maybe_rowid_alias}
             row_ts integer NOT NULL,
             row_peer integer NOT NULL,
             UNIQUE(row_ts, row_peer),
-            FOREIGN KEY(row_ts, row_peer) REFERENCES _synq_id(row_ts, row_peer)
+            FOREIGN KEY(row_ts, row_peer) REFERENCES _synql_id(row_ts, row_peer)
                 ON DELETE RESTRICT ON UPDATE CASCADE
         ) STRICT;
 
-        CREATE TRIGGER "_synq_delete_{tbl_name}"
+        CREATE TRIGGER "_synql_delete_{tbl_name}"
         AFTER DELETE ON "{tbl_name}"
         BEGIN
-            DELETE FROM "_synq_id_{tbl_name}" WHERE rowid = OLD.rowid;
+            DELETE FROM "_synql_id_{tbl_name}" WHERE rowid = OLD.rowid;
         END;
 
-        CREATE TRIGGER "_synq_delete_id_{tbl_name}"
-        AFTER DELETE ON "_synq_id_{tbl_name}"
-        WHEN (SELECT NOT is_merging FROM _synq_local)
+        CREATE TRIGGER "_synql_delete_id_{tbl_name}"
+        AFTER DELETE ON "_synql_id_{tbl_name}"
+        WHEN (SELECT NOT is_merging FROM _synql_local)
         BEGIN
-            UPDATE _synq_local SET ts = ts + 1;
-            UPDATE _synq_context SET ts = _synq_local.ts
-            FROM _synq_local WHERE _synq_context.peer = _synq_local.peer;
+            UPDATE _synql_local SET ts = ts + 1;
+            UPDATE _synql_context SET ts = _synql_local.ts
+            FROM _synql_local WHERE _synql_context.peer = _synql_local.peer;
 
-            INSERT INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
+            INSERT INTO _synql_id_undo(ts, peer, row_ts, row_peer, ul)
             SELECT local.ts, local.peer, OLD.row_ts, OLD.row_peer, 1
-            FROM _synq_local AS local
+            FROM _synql_local AS local
             WHERE true  -- avoid parsing ambiguity
             ON CONFLICT
             DO UPDATE SET ul = ul + 1, ts = excluded.ts, peer = excluded.peer;
         END;
         """
-        metadata = f"INSERT INTO _synq_names VALUES({ids[tbl]}, '{tbl_name}');"
+        metadata = f"INSERT INTO _synql_names VALUES({ids[tbl]}, '{tbl_name}');"
         for cst in tbl.all_constraints():
             if cst.name is not None:
-                metadata += f"""INSERT INTO _synq_names VALUES({ids[(tbl, cst)]}, '{cst.name}');"""
+                metadata += f"""INSERT INTO _synql_names VALUES({ids[(tbl, cst)]}, '{cst.name}');"""
         for col in replicated_cols:
             metadata += f"""
-            INSERT INTO _synq_names VALUES({ids[(tbl, col)]}, '{col.name}');
+            INSERT INTO _synql_names VALUES({ids[(tbl, col)]}, '{col.name}');
             """
             for uniq in tbl_uniqueness:
                 if col.name in uniq.columns():
                     metadata += f"""
-                    INSERT INTO _synq_uniqueness(field, tbl_index)
+                    INSERT INTO _synql_uniqueness(field, tbl_index)
                     VALUES({ids[(tbl, col)]}, {ids[(tbl, uniq)]});
                     """.rstrip()
         for fk in tbl.foreign_keys():
             for uniq in tbl_uniqueness:
                 if any(col_name in uniq.columns() for col_name in fk.columns):
                     metadata += f"""
-                    INSERT INTO _synq_uniqueness(field, tbl_index)
+                    INSERT INTO _synql_uniqueness(field, tbl_index)
                     VALUES({ids[(tbl, fk)]}, {ids[(tbl, uniq)]});
                     """.rstrip()
             foreign_tbl = tables[fk.foreign_table[0]]
@@ -309,7 +309,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 if tuple(f_uniq.columns()) == referred_cols
             )
             metadata += f"""
-            INSERT INTO _synq_fk(field, foreign_index, on_delete, on_update)
+            INSERT INTO _synql_fk(field, foreign_index, on_delete, on_update)
             VALUES(
                 {ids[(tbl, fk)]}, {ids[(foreign_tbl, f_uniq)]},
                 {FK_ACTION[normalize_fk_action(fk.on_delete, conf)]},
@@ -323,9 +323,9 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 f'({ids[(tbl, col)]}, NEW."{col.name}")' for col in replicated_cols
             )
             log_insertions += f"""
-            INSERT INTO _synq_log(ts, peer, row_ts, row_peer, field, val)
+            INSERT INTO _synql_log(ts, peer, row_ts, row_peer, field, val)
             SELECT local.ts, local.peer, local.ts, local.peer, tuples.*
-            FROM _synq_local AS local, (VALUES {log_tuples}) AS tuples;
+            FROM _synql_local AS local, (VALUES {log_tuples}) AS tuples;
             """.strip()
             log_changed_tuples = "UNION ALL".join(
                 f"""
@@ -335,9 +335,9 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 for col in replicated_cols
             )
             log_updates += f"""
-            INSERT INTO _synq_log(ts, peer, row_ts, row_peer, field, val)
+            INSERT INTO _synql_log(ts, peer, row_ts, row_peer, field, val)
             SELECT local.ts, local.peer, cur.row_ts, cur.row_peer, tuples.*
-            FROM _synq_local AS local, "_synq_id_{tbl_name}" AS cur,
+            FROM _synql_local AS local, "_synql_id_{tbl_name}" AS cur,
                 ({log_changed_tuples}) AS tuples
             WHERE cur.rowid = NEW.rowid;
             """.strip()
@@ -361,12 +361,12 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
             )
             fklog_insertions += f"""
                 -- Handle case where at least one col is NULL
-                INSERT INTO _synq_fklog(ts, peer, row_ts, row_peer, field, foreign_row_ts, foreign_row_peer)
+                INSERT INTO _synql_fklog(ts, peer, row_ts, row_peer, field, foreign_row_ts, foreign_row_peer)
                 SELECT
                     local.ts, local.peer, local.ts, local.peer, {ids[(tbl, fk)]},
                     target.row_ts, target.row_peer
-                FROM _synq_local AS local LEFT JOIN (
-                    SELECT row_ts, row_peer FROM "_synq_id_{foreign_tbl_name}"
+                FROM _synql_local AS local LEFT JOIN (
+                    SELECT row_ts, row_peer FROM "_synql_id_{foreign_tbl_name}"
                     WHERE rowid = (
                         SELECT rowid FROM "{foreign_tbl_name}"
                         WHERE {new_referred_match}
@@ -375,14 +375,14 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
             """.rstrip()
             fklog_updates += f"""
                 -- Handle case where at least one col is NULL
-                INSERT INTO _synq_fklog(ts, peer, row_ts, row_peer, field, foreign_row_ts, foreign_row_peer)
+                INSERT INTO _synql_fklog(ts, peer, row_ts, row_peer, field, foreign_row_ts, foreign_row_peer)
                 SELECT
                     local.ts, local.peer, cur.row_ts, cur.row_peer, {ids[(tbl, fk)]},
                     target.row_ts, target.row_peer
-                FROM _synq_local AS local, (
-                    SELECT * FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid
+                FROM _synql_local AS local, (
+                    SELECT * FROM "_synql_id_{tbl_name}" WHERE rowid = NEW.rowid
                 ) AS cur LEFT JOIN (
-                    SELECT row_ts, row_peer FROM "_synq_id_{foreign_tbl_name}"
+                    SELECT row_ts, row_peer FROM "_synql_id_{foreign_tbl_name}"
                     WHERE rowid = (
                         SELECT rowid FROM "{foreign_tbl_name}"
                         WHERE {new_referred_match}
@@ -391,7 +391,7 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 WHERE NOT EXISTS(
                     -- is ON UPDATE CASCADE?
                     SELECT 1 FROM (
-                        SELECT foreign_row_ts, foreign_row_peer FROM _synq_fklog
+                        SELECT foreign_row_ts, foreign_row_peer FROM _synql_fklog
                         WHERE row_ts = cur.row_ts AND row_peer = cur.row_peer AND
                             field = {ids[(tbl, fk)]}
                         ORDER BY ts, peer LIMIT 1
@@ -406,24 +406,24 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
                 );
             """
         triggers = f"""
-        CREATE TRIGGER "_synq_log_insert_{tbl_name}"
+        CREATE TRIGGER "_synql_log_insert_{tbl_name}"
         AFTER INSERT ON "{tbl_name}"
-        WHEN (SELECT NOT is_merging FROM _synq_local)
+        WHEN (SELECT NOT is_merging FROM _synql_local)
         BEGIN
             -- Handle INSERT OR REPLACE
             -- Delete trigger is not fired when recursive triggers are disabled.
             -- To ensure that the pre-existing row is deleted, we attempt a deletion.
-            DELETE FROM "_synq_id_{tbl_name}" WHERE rowid = NEW.rowid;
+            DELETE FROM "_synql_id_{tbl_name}" WHERE rowid = NEW.rowid;
 
-            UPDATE _synq_local SET ts = ts + 1;
-            UPDATE _synq_context SET ts = _synq_local.ts
-            FROM _synq_local WHERE _synq_context.peer = _synq_local.peer;
+            UPDATE _synql_local SET ts = ts + 1;
+            UPDATE _synql_context SET ts = _synql_local.ts
+            FROM _synql_local WHERE _synql_context.peer = _synql_local.peer;
 
-            INSERT INTO "_synq_id_{tbl_name}"(rowid, row_ts, row_peer)
-            SELECT NEW.rowid, ts, peer FROM _synq_local;
+            INSERT INTO "_synql_id_{tbl_name}"(rowid, row_ts, row_peer)
+            SELECT NEW.rowid, ts, peer FROM _synql_local;
 
-            INSERT INTO _synq_id(row_ts, row_peer, tbl)
-            SELECT ts, peer, {ids[tbl]} FROM _synq_local;
+            INSERT INTO _synql_id(row_ts, row_peer, tbl)
+            SELECT ts, peer, {ids[tbl]} FROM _synql_local;
             {log_insertions}
             {fklog_insertions}
         END;
@@ -433,13 +433,13 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
         ]
         if len(tracked_cols) > 0:
             triggers += f"""
-            CREATE TRIGGER "_synq_log_update_{tbl_name}"
+            CREATE TRIGGER "_synql_log_update_{tbl_name}"
             AFTER UPDATE OF {','.join(tracked_cols)} ON "{tbl_name}"
-            WHEN (SELECT NOT is_merging FROM _synq_local)
+            WHEN (SELECT NOT is_merging FROM _synql_local)
             BEGIN
-                UPDATE _synq_local SET ts = ts + 1;
-                UPDATE _synq_context SET ts = _synq_local.ts
-                FROM _synq_local WHERE _synq_context.peer = _synq_local.peer;
+                UPDATE _synql_local SET ts = ts + 1;
+                UPDATE _synql_context SET ts = _synql_local.ts
+                FROM _synql_local WHERE _synql_context.peer = _synql_local.peer;
                 {log_updates}
                 {fklog_updates}
             END;
@@ -447,14 +447,14 @@ def _synq_triggers(tables: sql.Symbols, conf: Config) -> str:
         rowid_aliases = utils.rowid_aliases(tbl)
         if len(rowid_aliases) > 0:
             triggers += f"""
-            CREATE TRIGGER "_synq_log_update_rowid_{tbl_name}_rowid"
+            CREATE TRIGGER "_synql_log_update_rowid_{tbl_name}_rowid"
             AFTER UPDATE OF {", ".join(rowid_aliases)} ON "{tbl_name}"
             BEGIN
-                UPDATE "_synq_id_{tbl_name}" SET rowid = NEW."{rowid_aliases[0]}"
+                UPDATE "_synql_id_{tbl_name}" SET rowid = NEW."{rowid_aliases[0]}"
                 WHERE rowid = OLD."{rowid_aliases[0]}";
             END;
             """.rstrip()
-        result += metadata + textwrap.dedent(table_synq_id) + textwrap.dedent(triggers)
+        result += metadata + textwrap.dedent(table_synql_id) + textwrap.dedent(triggers)
     return result.strip()
 
 
@@ -469,11 +469,11 @@ def _allocate_id(db: sqlite3.Connection, /, *, id: int | None = None) -> None:
     with closing(db.cursor()) as cursor:
         if id is None:
             # Generate an identifier with 48 bits of entropy
-            cursor.execute(f"UPDATE _synq_local SET peer = (random() >> 16);")
+            cursor.execute(f"UPDATE _synql_local SET peer = (random() >> 16);")
         else:
-            cursor.execute(f"UPDATE _synq_local SET peer = {id};")
+            cursor.execute(f"UPDATE _synql_local SET peer = {id};")
         cursor.execute(
-            "INSERT INTO _synq_context(peer, ts) SELECT peer, 0 FROM _synq_local;"
+            "INSERT INTO _synql_context(peer, ts) SELECT peer, 0 FROM _synql_local;"
         )
 
 
@@ -488,9 +488,9 @@ def init(
             + _CREATE_REPLICATION_TABLES
             + _CREATE_LOCAL_TABLES_VIEWS
         )
-        cursor.executescript(_synq_triggers(tables, conf))
+        cursor.executescript(_synql_triggers(tables, conf))
         if not conf.physical_clock:
-            cursor.execute(f"DROP TRIGGER _synq_local_clock;")
+            cursor.execute(f"DROP TRIGGER _synql_local_clock;")
     _allocate_id(db, id=id)
 
 
@@ -500,7 +500,7 @@ def fingerprint(db: sqlite3.Connection, fp_path: pathlib.Path | str, /) -> None:
         cursor.executescript(_CREATE_TABLE_CONTEXT)
     script = f"""
     ATTACH DATABASE '{fp_path}' AS extern;
-    INSERT INTO extern._synq_context SELECT * FROM _synq_context;
+    INSERT INTO extern._synql_context SELECT * FROM _synql_context;
     DETACH DATABASE extern;
     """
     db.executescript(script)
@@ -518,7 +518,7 @@ def delta(
     script = f"""
     ATTACH DATABASE '{fp_path}' AS fp;
     ATTACH DATABASE '{delta_path}' AS delta;
-    INSERT INTO extern._synq_context SELECT * FROM _synq_context;
+    INSERT INTO extern._synql_context SELECT * FROM _synql_context;
     DETACH DATABASE delta;
     DETACH DATABASE fp;
     """
@@ -541,14 +541,14 @@ def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str) -> Non
 
         ATTACH DATABASE '{remote_db_path}' AS extern;
 
-        UPDATE _synq_local SET is_merging = 1;
+        UPDATE _synql_local SET is_merging = 1;
 
         {_PULL_EXTERN}
         {_CONFLICT_RESOLUTION}
         {merging}
         {_MERGE_END}
 
-        UPDATE _synq_local SET is_merging = 0;
+        UPDATE _synql_local SET is_merging = 0;
 
         DETACH DATABASE extern;
         """
@@ -559,36 +559,36 @@ def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str) -> Non
 
 _PULL_EXTERN = """
 -- Update clock
-UPDATE _synq_local SET ts = max(_synq_local.ts, max(ctx.ts)) + 1
-FROM extern._synq_context AS ctx;
+UPDATE _synql_local SET ts = max(_synql_local.ts, max(ctx.ts)) + 1
+FROM extern._synql_context AS ctx;
 
 -- Add missing peers in the context with a ts of 0
-INSERT OR IGNORE INTO _synq_context SELECT peer, 0 FROM extern._synq_context;
-INSERT OR IGNORE INTO extern._synq_context SELECT peer, 0 FROM _synq_context;
+INSERT OR IGNORE INTO _synql_context SELECT peer, 0 FROM extern._synql_context;
+INSERT OR IGNORE INTO extern._synql_context SELECT peer, 0 FROM _synql_context;
 
 -- Add new id and log entries
-INSERT INTO _synq_id
-SELECT id.* FROM extern._synq_id AS id JOIN _synq_context AS ctx
+INSERT INTO _synql_id
+SELECT id.* FROM extern._synql_id AS id JOIN _synql_context AS ctx
     ON id.row_ts > ctx.ts AND id.row_peer = ctx.peer;
 
-INSERT INTO _synq_log
-SELECT log.* FROM extern._synq_log AS log JOIN _synq_context AS ctx
+INSERT INTO _synql_log
+SELECT log.* FROM extern._synql_log AS log JOIN _synql_context AS ctx
     ON log.ts > ctx.ts AND log.peer = ctx.peer;
 
-INSERT INTO _synq_fklog
+INSERT INTO _synql_fklog
 SELECT fklog.*
-FROM extern._synq_fklog AS fklog JOIN _synq_context AS ctx
+FROM extern._synql_fklog AS fklog JOIN _synql_context AS ctx
     ON fklog.ts > ctx.ts AND fklog.peer = ctx.peer;
 
-INSERT INTO _synq_id_undo
-SELECT log.* FROM extern._synq_id_undo AS log JOIN _synq_context AS ctx
+INSERT INTO _synql_id_undo
+SELECT log.* FROM extern._synql_id_undo AS log JOIN _synql_context AS ctx
     ON log.ts > ctx.ts AND log.peer = ctx.peer
 WHERE true  -- avoid parsing ambiguity
 ON CONFLICT DO UPDATE SET ul = excluded.ul, ts = excluded.ts, peer = excluded.peer
 WHERE ul < excluded.ul;
 
-INSERT INTO _synq_undolog
-SELECT log.* FROM extern._synq_undolog AS log JOIN _synq_context AS ctx
+INSERT INTO _synql_undolog
+SELECT log.* FROM extern._synql_undolog AS log JOIN _synql_context AS ctx
     ON log.ts > ctx.ts AND log.peer = ctx.peer
 WHERE true  -- avoid parsing ambiguity
 ON CONFLICT DO UPDATE SET ul = excluded.ul, ts = excluded.ts, peer = excluded.peer
@@ -598,10 +598,10 @@ WHERE ul < excluded.ul;
 _CONFLICT_RESOLUTION = f"""
 -- A. ON UPDATE RESTRICT
 -- undo all concurrent updates to a restrict ref
-INSERT OR REPLACE INTO _synq_undolog(ts, peer, obj_peer, obj_ts, ul)
+INSERT OR REPLACE INTO _synql_undolog(ts, peer, obj_peer, obj_ts, ul)
 SELECT local.ts, local.peer, log.peer, log.ts, log.ul + 1
-FROM _synq_local AS local, _synq_context AS ctx, extern._synq_context AS ectx,
-    _synq_log_extra AS log JOIN _synq_uniqueness AS uniq USING(field), _synq_fklog_effective AS fklog
+FROM _synql_local AS local, _synql_context AS ctx, extern._synql_context AS ectx,
+    _synql_log_extra AS log JOIN _synql_uniqueness AS uniq USING(field), _synql_fklog_effective AS fklog
 WHERE (
     log.ts > fklog.ts OR (log.ts = fklog.ts AND log.peer = fklog.peer) OR
     (log.ts > ctx.ts AND log.peer = ctx.peer AND fklog.ts > ectx.ts AND fklog.peer = ectx.peer) OR
@@ -613,27 +613,27 @@ WHERE (
 ) AND fklog.on_update = 1 AND log.ul%2 = 0;
 
 -- B. ON DELETE RESTRICT
-INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
-WITH RECURSIVE _synq_restrict_refs(foreign_row_ts, foreign_row_peer) AS (
+INSERT OR REPLACE INTO _synql_id_undo(ts, peer, row_ts, row_peer, ul)
+WITH RECURSIVE _synql_restrict_refs(foreign_row_ts, foreign_row_peer) AS (
     SELECT foreign_row_ts, foreign_row_peer
-    FROM _synq_fklog_effective
+    FROM _synql_fklog_effective
     WHERE on_delete = 1 AND row_ul%2 = 0
     UNION
     SELECT target.foreign_row_ts, target.foreign_row_peer
-    FROM _synq_restrict_refs AS src JOIN _synq_fklog_effective AS target
+    FROM _synql_restrict_refs AS src JOIN _synql_fklog_effective AS target
         ON src.foreign_row_ts = target.row_ts AND src.foreign_row_peer = target.row_peer
     WHERE on_delete = 0
 )
 SELECT local.ts, local.peer, row_ts, row_peer, ul + 1
-FROM _synq_local AS local, _synq_restrict_refs JOIN _synq_id_undo
+FROM _synql_local AS local, _synql_restrict_refs JOIN _synql_id_undo
     ON foreign_row_ts = row_ts AND foreign_row_peer = row_peer
 WHERE ul%2 = 1;
 
 -- C. ON UPDATE SET NULL
-INSERT INTO _synq_fklog_effective(row_ts, row_peer, field)
+INSERT INTO _synql_fklog_effective(row_ts, row_peer, field)
 SELECT fklog.row_ts, fklog.row_peer, fklog.field
-FROM _synq_context AS ctx, extern._synq_context AS ectx,
-    _synq_log_effective AS log JOIN _synq_uniqueness AS uniq USING(field), _synq_fklog_effective AS fklog
+FROM _synql_context AS ctx, extern._synql_context AS ectx,
+    _synql_log_effective AS log JOIN _synql_uniqueness AS uniq USING(field), _synql_fklog_effective AS fklog
 WHERE (
     (log.ts > ctx.ts AND log.peer = ctx.peer AND fklog.ts > ectx.ts AND fklog.peer = ectx.peer) OR
     (log.ts > ectx.ts AND log.peer = ectx.peer AND fklog.ts > ctx.ts AND fklog.peer = ctx.peer)
@@ -645,27 +645,27 @@ WHERE (
 
 -- D. resolve uniqueness conflicts
 -- undo latest rows with conflicting unique keys
-INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
-WITH _synq_unified_log_effective AS (
+INSERT OR REPLACE INTO _synql_id_undo(ts, peer, row_ts, row_peer, ul)
+WITH _synql_unified_log_effective AS (
     SELECT
         log.ts, log.peer, log.row_ts, log.row_peer, log.field,
         log.val, NULL AS foreign_row_ts, NULL AS foreign_row_peer, log.row_ul
-    FROM _synq_log_effective AS log
+    FROM _synql_log_effective AS log
     UNION ALL
     SELECT
         fklog.ts, fklog.peer, fklog.row_ts, fklog.row_peer, fklog.field,
         NULL AS val, fklog.foreign_row_ts, fklog.foreign_row_peer, fklog.row_ul
-    FROM _synq_fklog_effective AS fklog
+    FROM _synql_fklog_effective AS fklog
 )
 SELECT DISTINCT local.ts, local.peer, log.row_ts, log.row_peer, log.row_ul + 1
-FROM _synq_local AS local, _synq_unified_log_effective AS log JOIN _synq_unified_log_effective AS self
+FROM _synql_local AS local, _synql_unified_log_effective AS log JOIN _synql_unified_log_effective AS self
         ON log.field = self.field AND (
             log.val = self.val OR (
                 log.foreign_row_ts = self.foreign_row_ts AND
                 log.foreign_row_peer = self.foreign_row_peer
             )
-        ) JOIN _synq_uniqueness AS uniq USING(field),
-    _synq_context AS ctx, extern._synq_context AS ectx
+        ) JOIN _synql_uniqueness AS uniq USING(field),
+    _synql_context AS ctx, extern._synql_context AS ectx
 WHERE (
     log.row_ts > self.row_ts OR (
         log.row_ts = self.row_ts AND log.row_peer > self.row_peer
@@ -678,47 +678,47 @@ WHERE (
 -- )
 GROUP BY log.row_ts, log.row_peer, self.row_ts, self.row_peer, uniq.tbl_index
 HAVING count(DISTINCT log.field) >= (
-    SELECT count(DISTINCT field) FROM _synq_uniqueness WHERE tbl_index = uniq.tbl_index
+    SELECT count(DISTINCT field) FROM _synql_uniqueness WHERE tbl_index = uniq.tbl_index
 );
 
 -- E. ON DELETE CASCADE
-INSERT OR REPLACE INTO _synq_id_undo(ts, peer, row_ts, row_peer, ul)
-WITH RECURSIVE _synq_dangling_refs(row_ts, row_peer, row_ul) AS (
+INSERT OR REPLACE INTO _synql_id_undo(ts, peer, row_ts, row_peer, ul)
+WITH RECURSIVE _synql_dangling_refs(row_ts, row_peer, row_ul) AS (
     SELECT fklog.row_ts, fklog.row_peer, fklog.row_ul
-    FROM _synq_fklog_effective AS fklog JOIN _synq_id_undo AS undo
+    FROM _synql_fklog_effective AS fklog JOIN _synql_id_undo AS undo
         ON fklog.foreign_row_ts = undo.row_ts AND fklog.foreign_row_peer = undo.row_peer
     WHERE fklog.on_delete <> 2 AND fklog.row_ul%2 = 0 AND undo.ul%2 = 1
     UNION
     SELECT src.row_ts, src.row_peer, src.row_ul
-    FROM _synq_dangling_refs AS target JOIN _synq_fklog_effective AS src
+    FROM _synql_dangling_refs AS target JOIN _synql_fklog_effective AS src
         ON src.foreign_row_ts = target.row_ts AND src.foreign_row_peer = target.row_peer
     WHERE src.row_ul%2 = 0
 )
 SELECT local.ts, local.peer, row_ts, row_peer, row_ul+1
-FROM _synq_local AS local, _synq_dangling_refs
+FROM _synql_local AS local, _synql_dangling_refs
 WHERE row_ul%2 = 0;
 """
 
 _MERGE_END = """
 -- Update context
-UPDATE _synq_context SET ts = ctx.ts FROM extern._synq_context AS ctx
-WHERE ctx.ts > _synq_context.ts AND _synq_context.peer = ctx.peer;
+UPDATE _synql_context SET ts = ctx.ts FROM extern._synql_context AS ctx
+WHERE ctx.ts > _synql_context.ts AND _synql_context.peer = ctx.peer;
 
-UPDATE _synq_context SET ts = local.ts
-FROM _synq_local AS local JOIN _synq_id_undo USING(peer, ts)
-WHERE _synq_context.peer = local.peer;
+UPDATE _synql_context SET ts = local.ts
+FROM _synql_local AS local JOIN _synql_id_undo USING(peer, ts)
+WHERE _synql_context.peer = local.peer;
 
-UPDATE _synq_context SET ts = local.ts
-FROM _synq_local AS local JOIN _synq_undolog USING(peer, ts)
-WHERE _synq_context.peer = local.peer;
+UPDATE _synql_context SET ts = local.ts
+FROM _synql_local AS local JOIN _synql_undolog USING(peer, ts)
+WHERE _synql_context.peer = local.peer;
 
-UPDATE _synq_context SET ts = local.ts
-FROM _synq_local AS local JOIN _synq_log USING(peer, ts)
-WHERE _synq_context.peer = local.peer;
+UPDATE _synql_context SET ts = local.ts
+FROM _synql_local AS local JOIN _synql_log USING(peer, ts)
+WHERE _synql_context.peer = local.peer;
 
-UPDATE _synq_context SET ts = local.ts
-FROM _synq_local AS local JOIN _synq_fklog USING(peer, ts)
-WHERE _synq_context.peer = local.peer;
+UPDATE _synql_context SET ts = local.ts
+FROM _synql_local AS local JOIN _synql_fklog USING(peer, ts)
+WHERE _synql_context.peer = local.peer;
 """
 
 
@@ -733,7 +733,7 @@ def _create_pull(tables: sql.Symbols) -> str:
             col_names += [col.name]
             selectors += [
                 f'''(
-                SELECT log.val FROM _synq_log_extra AS log
+                SELECT log.val FROM _synql_log_extra AS log
                 WHERE log.row_ts = id.row_ts AND log.row_peer = id.row_peer AND
                     log.field = {ids[(tbl, col)]} AND log.ul%2 = 0
                 ORDER BY log.ts DESC, log.peer DESC LIMIT 1
@@ -745,7 +745,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                 if col_name not in col_names:
                     col_names += [col_name]
                     selector = f"""
-                    SELECT fklog.* FROM _synq_fklog_extra AS fklog
+                    SELECT fklog.* FROM _synql_fklog_extra AS fklog
                     WHERE fklog.field = {ids[(tbl, fk)]} AND fklog.ul%2 = 0 AND
                         fklog.row_peer = id.row_peer AND fklog.row_ts = id.row_ts AND
                         fklog.row_ul%2 = 0
@@ -757,7 +757,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                             selector = f"""
                             SELECT fklog2.* FROM (
                                 {selector}
-                            ) AS fklog LEFT JOIN _synq_fklog_extra AS fklog2
+                            ) AS fklog LEFT JOIN _synql_fklog_extra AS fklog2
                                 ON fklog2.field = {ids[(referred_tbl, referred)]} AND
                                     fklog2.ul%2 = 0 AND
                                     fklog.foreign_row_peer = fklog2.row_peer AND
@@ -775,7 +775,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                                 selector = f"""
                                 SELECT rw.rowid FROM (
                                         {selector}
-                                ) AS fklog LEFT JOIN "_synq_id_{referred_tbl.name[0]}" AS rw
+                                ) AS fklog LEFT JOIN "_synql_id_{referred_tbl.name[0]}" AS rw
                                     ON fklog.foreign_row_peer = rw.row_peer AND
                                         fklog.foreign_row_ts = rw.row_ts
                                 """
@@ -783,7 +783,7 @@ def _create_pull(tables: sql.Symbols) -> str:
                                 selector = f"""
                                 SELECT log.val FROM (
                                         {selector}
-                                ) AS fklog LEFT JOIN _synq_log_extra AS log
+                                ) AS fklog LEFT JOIN _synql_log_extra AS log
                                     ON log.row_peer = fklog.foreign_row_peer AND
                                         log.row_ts = fklog.foreign_row_ts AND
                                         log.field = {ids[(referred_tbl, ref_col)]} AND log.ul%2 = 0
@@ -793,24 +793,24 @@ def _create_pull(tables: sql.Symbols) -> str:
                             selectors += [f'({selector}) AS "{col_name}"']
         merger += f"""
         INSERT OR REPLACE INTO "{tbl_name}"({', '.join(col_names)})
-        WITH RECURSIVE _synq_unified_log AS (
+        WITH RECURSIVE _synql_unified_log AS (
             SELECT
             log.ts, log.peer, log.row_ts, log.row_peer, log.field,
             log.val, NULL AS foreign_row_ts, NULL AS foreign_row_peer,
             log.ul, log.ul_ts, log.ul_peer, log.row_ul
-            FROM _synq_log_effective AS log
+            FROM _synql_log_effective AS log
             UNION ALL
             SELECT
                 fklog.ts, fklog.peer, fklog.row_ts, fklog.row_peer, fklog.field,
                 NULL AS val, fklog.foreign_row_ts, fklog.foreign_row_peer,
                 fklog.ul, fklog.ul_ts, fklog.ul_peer, fklog.row_ul
-            FROM _synq_fklog_effective AS fklog
-        ), _synq_cascade_refs(row_ts, row_peer, field) AS (
+            FROM _synql_fklog_effective AS fklog
+        ), _synql_cascade_refs(row_ts, row_peer, field) AS (
             -- on update cascade triggered by extern updates OR undone updates
             SELECT fklog.row_ts, fklog.row_peer, fklog.field
-            FROM _synq_context AS ctx, extern._synq_context AS ectx, _synq_unified_log AS log
-                JOIN _synq_uniqueness AS uniq USING(field)
-                JOIN _synq_fklog_effective AS fklog
+            FROM _synql_context AS ctx, extern._synql_context AS ectx, _synql_unified_log AS log
+                JOIN _synql_uniqueness AS uniq USING(field)
+                JOIN _synql_fklog_effective AS fklog
                     ON log.row_ts = fklog.foreign_row_ts AND
                         log.row_peer = fklog.foreign_row_peer AND
                         uniq.tbl_index = fklog.foreign_index
@@ -819,9 +819,9 @@ def _create_pull(tables: sql.Symbols) -> str:
                 (log.ul_peer = ctx.peer AND log.ul_ts > ctx.ts))
             UNION
             SELECT src.row_ts, src.row_peer, src.field
-            FROM _synq_cascade_refs AS target
-                JOIN _synq_uniqueness AS uniq USING(field)
-                JOIN _synq_fklog_effective AS src
+            FROM _synql_cascade_refs AS target
+                JOIN _synql_uniqueness AS uniq USING(field)
+                JOIN _synql_fklog_effective AS src
                     ON src.foreign_row_ts = target.row_ts AND
                         src.foreign_row_peer = target.row_peer AND
                         uniq.tbl_index = src.foreign_index
@@ -829,43 +829,43 @@ def _create_pull(tables: sql.Symbols) -> str:
         )
         SELECT {', '.join(selectors)} FROM (
             SELECT id.rowid, id.row_ts, id.row_peer FROM (
-                SELECT log.row_ts, log.row_peer FROM _synq_unified_log AS log
-                    JOIN _synq_context AS ctx
+                SELECT log.row_ts, log.row_peer FROM _synql_unified_log AS log
+                    JOIN _synql_context AS ctx
                         ON (log.ul%2 = 0 AND log.peer = ctx.peer AND log.ts > ctx.ts) OR
                             (log.ul%2 = 1 AND log.ul_peer = ctx.peer AND log.ul_ts > ctx.ts)
                 WHERE log.row_ul%2 = 0
                 UNION
-                SELECT redo.row_ts, redo.row_peer FROM _synq_id_undo AS redo
-                    JOIN _synq_context AS ctx
+                SELECT redo.row_ts, redo.row_peer FROM _synql_id_undo AS redo
+                    JOIN _synql_context AS ctx
                         ON redo.ts > ctx.ts AND redo.peer = ctx.peer
                 WHERE NOT redo.ul%2 = 1
                 UNION
-                SELECT log.row_ts, log.row_peer FROM _synq_context AS ctx
-                    JOIN _synq_undolog AS undo
+                SELECT log.row_ts, log.row_peer FROM _synql_context AS ctx
+                    JOIN _synql_undolog AS undo
                         ON undo.ts > ctx.ts AND undo.peer = ctx.peer
-                    JOIN _synq_log AS log
+                    JOIN _synql_log AS log
                         ON undo.obj_ts = log.ts AND undo.obj_peer = log.peer
                 WHERE undo.ul%2 = 1
                 UNION
-                SELECT log.row_ts, log.row_peer FROM _synq_context AS ctx
-                    JOIN _synq_undolog AS undo
+                SELECT log.row_ts, log.row_peer FROM _synql_context AS ctx
+                    JOIN _synql_undolog AS undo
                         ON undo.ts > ctx.ts AND undo.peer = ctx.peer
-                    JOIN _synq_fklog AS log
+                    JOIN _synql_fklog AS log
                         ON undo.obj_ts = log.ts AND undo.obj_peer = log.peer
                 WHERE undo.ul%2 = 1
                 UNION
-                SELECT row_ts, row_peer FROM _synq_cascade_refs
+                SELECT row_ts, row_peer FROM _synql_cascade_refs
                 UNION
-                SELECT fklog.row_ts, fklog.row_peer FROM _synq_fklog_extra AS fklog
-                    JOIN _synq_id_undo AS undo
+                SELECT fklog.row_ts, fklog.row_peer FROM _synql_fklog_extra AS fklog
+                    JOIN _synql_id_undo AS undo
                         ON fklog.foreign_row_peer = undo.row_peer AND
                             fklog.foreign_row_ts = undo.row_ts
                 WHERE undo.ul%2 = 1 AND fklog.on_delete = 2
-            ) JOIN "_synq_id_{tbl_name}" AS id
+            ) JOIN "_synql_id_{tbl_name}" AS id
                 USING(row_ts, row_peer)
             UNION
-            SELECT id.rowid, id.row_ts, id.row_peer FROM "_synq_id_{tbl_name}" AS id
-                JOIN _synq_context AS ctx
+            SELECT id.rowid, id.row_ts, id.row_peer FROM "_synql_id_{tbl_name}" AS id
+                JOIN _synql_context AS ctx
                     ON id.row_ts > ctx.ts AND id.row_peer = ctx.peer
         ) AS id;
         """
@@ -874,30 +874,30 @@ def _create_pull(tables: sql.Symbols) -> str:
 
         -- Apply deletion (existing rows)
         DELETE FROM "{tbl_name}" WHERE rowid IN (
-            SELECT id.rowid FROM "_synq_id_{tbl_name}" AS id
-                JOIN _synq_id_undo AS undo
+            SELECT id.rowid FROM "_synql_id_{tbl_name}" AS id
+                JOIN _synql_id_undo AS undo
                     ON id.row_ts = undo.row_ts AND id.row_peer = undo.row_peer
             WHERE undo.ul%2 = 1
         );
  
         -- Auto-assign local rowids for new active rows
-        INSERT INTO "_synq_id_{tbl_name}"(row_peer, row_ts)
+        INSERT INTO "_synql_id_{tbl_name}"(row_peer, row_ts)
         SELECT id.row_peer, id.row_ts
-        FROM _synq_id AS id JOIN _synq_context AS ctx
+        FROM _synql_id AS id JOIN _synql_context AS ctx
             ON id.row_ts > ctx.ts AND id.row_peer = ctx.peer
         WHERE id.tbl = {ids[tbl]} AND NOT EXISTS(
-            SELECT 1 FROM _synq_id_undo AS undo
+            SELECT 1 FROM _synql_id_undo AS undo
             WHERE undo.ul%2 = 1 AND
                 undo.row_ts = id.row_ts AND undo.row_peer = id.row_peer
         );
 
         -- Auto-assign local rowids for redone rows
-        INSERT OR IGNORE INTO "_synq_id_{tbl_name}"(row_ts, row_peer)
+        INSERT OR IGNORE INTO "_synql_id_{tbl_name}"(row_ts, row_peer)
         SELECT id.row_ts, id.row_peer
-        FROM _synq_id_undo AS redo
-            JOIN _synq_context AS ctx
+        FROM _synql_id_undo AS redo
+            JOIN _synql_context AS ctx
                 ON redo.ts > ctx.ts AND redo.peer = ctx.peer
-            JOIN _synq_id AS id
+            JOIN _synql_id AS id
                 ON redo.row_ts = id.row_ts AND redo.row_peer = id.row_peer
                     AND id.tbl = {ids[tbl]}
         WHERE redo.ul%2 = 0;

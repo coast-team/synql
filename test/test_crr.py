@@ -1,7 +1,7 @@
 import pysqlite3 as sqlite3
 import typing
 from contextlib import closing
-from synqlite import crr
+from synql import crr
 import pathlib
 from sqlschm import sql
 from dataclasses import dataclass

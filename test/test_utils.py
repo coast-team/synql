@@ -2,7 +2,7 @@ from contextlib import closing
 import typing
 from dataclasses import dataclass, field
 from sqlschm import sql
-from synqlite import crr
+from synql import crr
 import pysqlite3 as sqlite3
 
 
@@ -45,7 +45,7 @@ def fetch(db: sqlite3.Connection, q: str) -> list[typing.Any]:
 
 _SELECT_AR_TABLE_NAME = """--sql
 SELECT name FROM sqlite_master WHERE type = 'table' AND
-    name NOT LIKE 'sqlite_%' AND name NOT LIKE '_synq_%';
+    name NOT LIKE 'sqlite_%' AND name NOT LIKE '_synql_%';
 """
 
 
@@ -58,7 +58,7 @@ def crr_from(db: sqlite3.Connection) -> Crr:
             r[:-2] + ((r[-2], r[-1]),)
             for r in fetch(
                 db,
-                f'SELECT tbl.*, id.row_ts, id.row_peer FROM "{tbl_name}" tbl JOIN "_synq_id_{tbl_name}" AS id ON tbl.rowid = id.rowid',
+                f'SELECT tbl.*, id.row_ts, id.row_peer FROM "{tbl_name}" tbl JOIN "_synql_id_{tbl_name}" AS id ON tbl.rowid = id.rowid',
             )
         )
     log = (
@@ -68,7 +68,7 @@ def crr_from(db: sqlite3.Connection) -> Crr:
                 db,
                 """
                 SELECT ts, peer, row_ts, row_peer, ifnull(name, field), val
-                FROM _synq_log_extra LEFT JOIN _synq_names
+                FROM _synql_log_extra LEFT JOIN _synql_names
                     ON field = id
                 """,
             )
@@ -85,7 +85,7 @@ def crr_from(db: sqlite3.Connection) -> Crr:
                     db,
                     """
                     SELECT ts, peer, row_ts, row_peer, ifnull(name, field), foreign_row_ts, foreign_row_peer 
-                    FROM _synq_fklog_extra LEFT JOIN _synq_names
+                    FROM _synql_fklog_extra LEFT JOIN _synql_names
                         ON field = id
                     """,
                 )
@@ -97,13 +97,13 @@ def crr_from(db: sqlite3.Connection) -> Crr:
                 for ts, peer, obj_ts, obj_peer, ul in fetch(
                     db,
                     """
-                    SELECT ts, peer, obj_ts, obj_peer, ul FROM _synq_undolog
+                    SELECT ts, peer, obj_ts, obj_peer, ul FROM _synql_undolog
                     UNION
-                    SELECT ts, peer, row_ts, row_peer, ul FROM _synq_id_undo
+                    SELECT ts, peer, row_ts, row_peer, ul FROM _synql_id_undo
                     """,
                 )
             }
         )
     )
-    ctx = {k: v for k, v in fetch(db, "SELECT peer, ts FROM _synq_context")}
+    ctx = {k: v for k, v in fetch(db, "SELECT peer, ts FROM _synql_context")}
     return Crr(tbls=tbls, ctx=ctx, log=log)

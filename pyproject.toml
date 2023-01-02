@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "synqlite"
+name = "synql"
 version = "0.1.0"
 description = ""
 authors = ["Victorien Elvinger <victorien@elvinger.fr>"]
