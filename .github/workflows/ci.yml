@@ -18,3 +18,4 @@ jobs:
             - run: poetry install
             - run: poetry run mypy synql
             - run: poetry run pytest
+            - run: poetry run black --check .
