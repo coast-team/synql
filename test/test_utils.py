@@ -1,3 +1,6 @@
+# Copyright (c) 2022 Victorien Elvinger
+# Licensed under the MIT License (https://mit-license.org)
+
 from contextlib import closing
 import typing
 from dataclasses import dataclass, field

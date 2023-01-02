@@ -1,3 +1,6 @@
+# Copyright (c) 2022 Victorien Elvinger
+# Licensed under the MIT License (https://mit-license.org)
+
 from dataclasses import dataclass
 from sqlschm import sql
 import typing

@@ -1,3 +1,6 @@
+# Copyright (c) 2022 Victorien Elvinger
+# Licensed under the MIT License (https://mit-license.org)
+
 from sqlschm.parser import parse_schema
 from sqlschm import sql
 from contextlib import closing
