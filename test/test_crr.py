@@ -9,6 +9,8 @@ from test_utils import execute, crr_from, Val, Undo, Crr
 from synql import crr
 
 
+# We disable physical clock in order to get deterministic logical timestamps.
+# In this case, every clock corresponds to the latest seen clock incremented by 1.
 _DEFAULT_CONF = crr.Config(physical_clock=False)
 
 

@@ -1,6 +1,17 @@
 # Copyright (c) 2022 Inria, Victorien Elvinger
 # Licensed under the MIT License (https://mit-license.org/)
 
+"""
+This module provides primitives to replicate a SQLite database.
+
+It si based on a Git-like model where a database is first initialized to replicable database.
+Once initialized, the database can be cloned (replicated).
+Modifications can be concurrently performed.
+Finally, a database can integrate the change of another database via a pull.
+
+See the [unit tests](../test/test_crr.py) for code examples.
+"""
+
 import typing
 import logging
 import pathlib
@@ -23,6 +34,126 @@ class Config:
     no_action_is_cascade: bool = False
 
 
+def init(
+    db: sqlite3.Connection, /, *, replica_id: int | None = None, conf: Config = Config()
+) -> None:
+    """Make a database a replicable database.
+
+    Once initialized, a database can be cloned, and can pull another a replica.
+    See `clone_to` and `pull_from` functions."""
+
+    sql_ar_schema = _get_schema(db)
+    tables = sql.symbols(parse_schema(sql_ar_schema))
+    with closing(db.cursor()) as cursor:
+        cursor.executescript(
+            _CREATE_TABLE_CONTEXT
+            + _CREATE_REPLICATION_TABLES
+            + _CREATE_LOCAL_TABLES_VIEWS
+        )
+        cursor.executescript(_synql_triggers(tables, conf))
+        if not conf.physical_clock:
+            cursor.execute("DROP TRIGGER _synql_local_clock;")
+    _allocate_id(db, replica_id=replica_id)
+
+
+def clone_to(
+    source: sqlite3.Connection,
+    target: sqlite3.Connection,
+    /,
+    *,
+    replica_id: int | None = None,
+) -> None:
+    """Clone `source` to `target` using `replica_id` as `target` replica identifier.
+
+    If `replica_id` is not provided, a random identifier is generated."""
+    source.commit()
+    source.backup(target)
+    _allocate_id(target, replica_id=replica_id)
+
+
+def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str, /) -> None:
+    """Pull state of `remote_db_path` in `db`."""
+    sql_ar_schema = _get_schema(db)
+    tables = sql.symbols(parse_schema(sql_ar_schema))
+    merging = _create_pull(tables)
+    result = f"""
+        PRAGMA defer_foreign_keys = ON;  -- automatically switch off at the end of transaction
+
+        ATTACH DATABASE '{remote_db_path}' AS extern;
+
+        UPDATE _synql_local SET is_merging = 1;
+
+        {_PULL_EXTERN}
+        {_CONFLICT_RESOLUTION}
+        {merging}
+        {_MERGE_END}
+
+        UPDATE _synql_local SET is_merging = 0;
+
+        DETACH DATABASE extern;
+        """
+    result = textwrap.dedent(result)
+    with closing(db.cursor()) as cursor:
+        cursor.executescript(result)
+
+
+def fingerprint(db: sqlite3.Connection, fp_path: pathlib.Path | str, /) -> None:
+    """Write the causal context of `db` to `fp_path`.
+
+    This can be used as a fingerprint in order to compute a delta on another replica.
+    Note that an entire database can behave like a fingerprint."""
+    db.commit()
+    with sqlite3.connect(fp_path) as target, closing(target.cursor()) as cursor:
+        cursor.executescript(_CREATE_TABLE_CONTEXT)
+    script = f"""
+    ATTACH DATABASE '{fp_path}' AS extern;
+    INSERT INTO extern._synql_context SELECT * FROM _synql_context;
+    DETACH DATABASE extern;
+    """
+    db.executescript(script)
+
+
+def delta(
+    db: sqlite3.Connection,
+    fp_path: pathlib.Path | str,
+    delta_path: pathlib.Path | str,
+    /,
+) -> None:
+    """Compute a delta from a fingerprint.
+
+    Note that an entire database can behave like a fingerprint and a delta."""
+
+    db.commit()
+    with sqlite3.connect(delta_path) as delta_db, closing(delta_db.cursor()) as cursor:
+        cursor.executescript(_CREATE_TABLE_CONTEXT + _CREATE_REPLICATION_TABLES)
+    script = f"""
+    ATTACH DATABASE '{fp_path}' AS fp;
+    ATTACH DATABASE '{delta_path}' AS delta;
+    INSERT INTO extern._synql_context SELECT * FROM _synql_context;
+    DETACH DATABASE delta;
+    DETACH DATABASE fp;
+    """
+
+    raise NotImplementedError("Unfinished implementation")
+
+
+def _allocate_id(db: sqlite3.Connection, /, *, replica_id: int | None = None) -> None:
+    with closing(db.cursor()) as cursor:
+        if replica_id is None:
+            # Generate an identifier with 48 bits of entropy
+            cursor.execute("UPDATE _synql_local SET peer = (random() >> 16);")
+        else:
+            cursor.execute(f"UPDATE _synql_local SET peer = {replica_id};")
+        cursor.execute(
+            "INSERT INTO _synql_context(peer, ts) SELECT peer, 0 FROM _synql_local;"
+        )
+
+
+# Encoded value in metadata of the database.
+#
+# sql.OnUpdateDelete.NO_ACTION, None should be normalized to sql.OnUpdateDelete.CASCADE or
+# sql.OnUpdateDelete.RESTRICT.
+# sql.OnUpdateDelete.SET_DEFAULT is not supported.
 _FK_ACTION = {
     sql.OnUpdateDelete.CASCADE: 0,
     sql.OnUpdateDelete.RESTRICT: 1,
@@ -38,6 +169,7 @@ def _normalize_fk_action(
     | typing.Literal[sql.OnUpdateDelete.SET_NULL]
 ):
     """Normalize `NO ACTION` and `None` to `RESTRICT` or `CASCADE` according to `conf`."""
+
     if action is sql.OnUpdateDelete.SET_DEFAULT:
         raise NotImplementedError("Synql does not support ON DELETE/UPDATE SET DEFAULT")
     if action is None or action is sql.OnUpdateDelete.NO_ACTION:
@@ -225,10 +357,15 @@ FROM _synql_id AS id
 
 
 def _synql_triggers(tables: sql.Symbols, conf: Config, /) -> str:
-    # FIXME: We do not support schema where:
-    # - tables that reuse the name rowid
-    # - without rowid tables (that's fine)
-    # - rowid is aliased with no-autoinc column
+    # We do not support schema where:
+    #
+    # - `WITHOUT ROWID` tables
+    # - tables with a column `rowid` that is not an alias of _SQLite_ `rowid` or an autoinc key
+    #
+    # These two limitations could be removed by using the primary key instead of `rowid`.
+    #
+    # Moreover Synql presents some limitations in the following cases:
+    #
     # - referred columns by a foreign key that are themselves a foreign key
     # - table with at least one column used in distinct foreign keys
     result = ""
@@ -236,12 +373,14 @@ def _synql_triggers(tables: sql.Symbols, conf: Config, /) -> str:
     for tbl_name, tbl in tables.items():
         tbl_uniqueness = tuple(tbl.uniqueness())
         replicated_cols = tuple(utils.replicated_columns(tbl))
-        # we use a dot (peer, ts) to globally and uniquely identify an object.
+        # we use a labelled timestamp (ts, peer) to globally and uniquely identify an object.
         # An object is either a row or a log entry.
-        # _synql_id_{tbl} contains a mapping between rows (rowid) and their id (dot)
-        # We use the primary key of the table as a way to locally identify a row.
+        #
+        # _synql_id_{tbl} contains a mapping between rows (rowid) and their id (labelled timestamp)
+        # We use the (real) primary key of the table as a way to locally identify a row.
         # In SQLITE ROWID tables have an implicit rowid column as real primary key.
         # To simplify, we only support ROWID tables.
+        #
         # We assume that rowid refers to the rowid column or an alias of that
         # (any INTEGER PRIMARY KEY).
         # We do not support the case where rowid is used to designate another col.
@@ -474,102 +613,6 @@ def _get_schema(db: sqlite3.Connection, /) -> str:
         cursor.execute(_SELECT_USER_TABLE_SCHEMA)
         result = ";".join(r[0] for r in cursor) + ";"
     return result
-
-
-def _allocate_id(db: sqlite3.Connection, /, *, replica_id: int | None = None) -> None:
-    with closing(db.cursor()) as cursor:
-        if replica_id is None:
-            # Generate an identifier with 48 bits of entropy
-            cursor.execute("UPDATE _synql_local SET peer = (random() >> 16);")
-        else:
-            cursor.execute(f"UPDATE _synql_local SET peer = {replica_id};")
-        cursor.execute(
-            "INSERT INTO _synql_context(peer, ts) SELECT peer, 0 FROM _synql_local;"
-        )
-
-
-def init(
-    db: sqlite3.Connection, /, *, replica_id: int | None = None, conf: Config = Config()
-) -> None:
-    sql_ar_schema = _get_schema(db)
-    tables = sql.symbols(parse_schema(sql_ar_schema))
-    with closing(db.cursor()) as cursor:
-        cursor.executescript(
-            _CREATE_TABLE_CONTEXT
-            + _CREATE_REPLICATION_TABLES
-            + _CREATE_LOCAL_TABLES_VIEWS
-        )
-        cursor.executescript(_synql_triggers(tables, conf))
-        if not conf.physical_clock:
-            cursor.execute("DROP TRIGGER _synql_local_clock;")
-    _allocate_id(db, replica_id=replica_id)
-
-
-def fingerprint(db: sqlite3.Connection, fp_path: pathlib.Path | str, /) -> None:
-    db.commit()
-    with sqlite3.connect(fp_path) as target, closing(target.cursor()) as cursor:
-        cursor.executescript(_CREATE_TABLE_CONTEXT)
-    script = f"""
-    ATTACH DATABASE '{fp_path}' AS extern;
-    INSERT INTO extern._synql_context SELECT * FROM _synql_context;
-    DETACH DATABASE extern;
-    """
-    db.executescript(script)
-
-
-def delta(
-    db: sqlite3.Connection,
-    fp_path: pathlib.Path | str,
-    delta_path: pathlib.Path | str,
-    /,
-) -> None:
-    db.commit()
-    with sqlite3.connect(delta_path) as delta_db, closing(delta_db.cursor()) as cursor:
-        cursor.executescript(_CREATE_TABLE_CONTEXT + _CREATE_REPLICATION_TABLES)
-    script = f"""
-    ATTACH DATABASE '{fp_path}' AS fp;
-    ATTACH DATABASE '{delta_path}' AS delta;
-    INSERT INTO extern._synql_context SELECT * FROM _synql_context;
-    DETACH DATABASE delta;
-    DETACH DATABASE fp;
-    """
-
-
-def clone_to(
-    source: sqlite3.Connection,
-    target: sqlite3.Connection,
-    /,
-    *,
-    replica_id: int | None = None,
-) -> None:
-    source.commit()
-    source.backup(target)
-    _allocate_id(target, replica_id=replica_id)
-
-
-def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str, /) -> None:
-    sql_ar_schema = _get_schema(db)
-    tables = sql.symbols(parse_schema(sql_ar_schema))
-    merging = _create_pull(tables)
-    result = f"""
-        PRAGMA defer_foreign_keys = ON;  -- automatically switch off at the end of transaction
-
-        ATTACH DATABASE '{remote_db_path}' AS extern;
-
-        UPDATE _synql_local SET is_merging = 1;
-
-        {_PULL_EXTERN}
-        {_CONFLICT_RESOLUTION}
-        {merging}
-        {_MERGE_END}
-
-        UPDATE _synql_local SET is_merging = 0;
-
-        DETACH DATABASE extern;
-        """
-    result = textwrap.dedent(result)
-    with closing(db.cursor()) as cursor:
-        cursor.executescript(result)
 
 
 _PULL_EXTERN = """
