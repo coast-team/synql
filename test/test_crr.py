@@ -1,5 +1,5 @@
-# Copyright (c) 2022 Victorien Elvinger
-# Licensed under the MIT License (https://mit-license.org)
+# Copyright (c) 2022 Inria, Victorien Elvinger
+# Licensed under the MIT License (https://mit-license.org/)
 
 import pysqlite3 as sqlite3
 import typing
