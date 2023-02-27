@@ -17,7 +17,7 @@ poetry run pytest
 ```
 
 We use [python type annotations](https://docs.python.org/3/library/typing.html).
-Type-check the code with [mypy](https://mypy-lang.org):
+Type-check the code with [mypy](https://mypy-lang.org/):
 
 ```sh
 poetry run mypy synql
@@ -29,11 +29,17 @@ Format the code with [black](https://github.com/psf/black):
 poetry run black .
 ```
 
+You can also lint the project thanks to [pylint](https://pylint.org/):
+
+```sh
+poetry run pylint synql
+```
+
 The project depends on _pysqlite3-binary_ in order to use the same version of sqlite3 in local and in CI.
 
 ## Commit messages
 
-The project adheres to the [conventional commit specification](https://www.conventionalcommits.org).
+The project adheres to the [conventional commit specification](https://www.conventionalcommits.org/).
 
 The following commit prefixes are supported:
 

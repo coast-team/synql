@@ -1,49 +1,53 @@
 # Copyright (c) 2022 Inria, Victorien Elvinger
 # Licensed under the MIT License (https://mit-license.org/)
 
-from sqlschm.parser import parse_schema
-from sqlschm import sql
-from contextlib import closing
+import typing
 import logging
 import pathlib
 import textwrap
-import pysqlite3 as sqlite3
-from synql import sqlschm_utils as utils
+from contextlib import closing
 from dataclasses import dataclass
-from typing import Literal
+import pysqlite3 as sqlite3
+from sqlschm.parser import parse_schema
+from sqlschm import sql
+from synql import sqlschm_utils as utils
 
 logging.basicConfig(level=logging.DEBUG)
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class Config:
+    """Configuration to change Synql behavior."""
+
     physical_clock: bool = True
-    no_action_is_cascade = False
+    no_action_is_cascade: bool = False
 
 
-FK_ACTION = {
+_FK_ACTION = {
     sql.OnUpdateDelete.CASCADE: 0,
     sql.OnUpdateDelete.RESTRICT: 1,
     sql.OnUpdateDelete.SET_NULL: 2,
 }
 
 
-def normalize_fk_action(
-    action: sql.OnUpdateDelete | None, conf: Config
-) -> Literal[sql.OnUpdateDelete.CASCADE] | Literal[
-    sql.OnUpdateDelete.RESTRICT
-] | Literal[sql.OnUpdateDelete.SET_NULL]:
+def _normalize_fk_action(
+    action: sql.OnUpdateDelete | None, conf: Config, /
+) -> (
+    typing.Literal[sql.OnUpdateDelete.CASCADE]
+    | typing.Literal[sql.OnUpdateDelete.RESTRICT]
+    | typing.Literal[sql.OnUpdateDelete.SET_NULL]
+):
+    """Normalize `NO ACTION` and `None` to `RESTRICT` or `CASCADE` according to `conf`."""
+    if action is sql.OnUpdateDelete.SET_DEFAULT:
+        raise NotImplementedError("Synql does not support ON DELETE/UPDATE SET DEFAULT")
     if action is None or action is sql.OnUpdateDelete.NO_ACTION:
         if conf.no_action_is_cascade:
             return sql.OnUpdateDelete.CASCADE
-        else:
-            return sql.OnUpdateDelete.RESTRICT
-    elif action is sql.OnUpdateDelete.SET_DEFAULT:
-        raise Exception("synql does not support On DELETE/UPDATE SET DEFAULT")
+        return sql.OnUpdateDelete.RESTRICT
     return action
 
 
-_SELECT_AR_TABLE_SCHEMA = """--sql
+_SELECT_USER_TABLE_SCHEMA = """--sql
 SELECT sql FROM sqlite_master WHERE (type = 'table' OR type = 'index') AND
     name NOT LIKE 'sqlite_%' AND name NOT LIKE '_synql_%';
 """
@@ -220,7 +224,7 @@ FROM _synql_id AS id
 """
 
 
-def _synql_triggers(tables: sql.Symbols, conf: Config) -> str:
+def _synql_triggers(tables: sql.Symbols, conf: Config, /) -> str:
     # FIXME: We do not support schema where:
     # - tables that reuse the name rowid
     # - without rowid tables (that's fine)
@@ -229,7 +233,7 @@ def _synql_triggers(tables: sql.Symbols, conf: Config) -> str:
     # - table with at least one column used in distinct foreign keys
     result = ""
     ids = utils.ids(tables)
-    for (tbl_name, tbl) in tables.items():
+    for tbl_name, tbl in tables.items():
         tbl_uniqueness = tuple(tbl.uniqueness())
         replicated_cols = tuple(utils.replicated_columns(tbl))
         # we use a dot (peer, ts) to globally and uniquely identify an object.
@@ -244,8 +248,12 @@ def _synql_triggers(tables: sql.Symbols, conf: Config) -> str:
         # _synql_id_{tbl} explicitly declares rowid when {tbl} aliases rowid.
         # This enables to exhibit consistent behavior upon database vacuum,
         # and so to keep rowid correspondence between {tbl} and _synql_id_{tbl}.
-        pk = tbl.primary_key()
-        maybe_autoinc = " AUTOINCREMENT" if pk is not None and pk.autoincrement else ""
+        primary_key = tbl.primary_key()
+        maybe_autoinc = (
+            " AUTOINCREMENT"
+            if primary_key is not None and primary_key.autoincrement
+            else ""
+        )
         maybe_rowid_alias = (
             f"rowid integer PRIMARY KEY{maybe_autoinc},"
             if utils.has_rowid_alias(tbl)
@@ -297,15 +305,15 @@ def _synql_triggers(tables: sql.Symbols, conf: Config) -> str:
                     INSERT INTO _synql_uniqueness(field, tbl_index)
                     VALUES({ids[(tbl, col)]}, {ids[(tbl, uniq)]});
                     """.rstrip()
-        for fk in tbl.foreign_keys():
+        for foreign_key in tbl.foreign_keys():
             for uniq in tbl_uniqueness:
-                if any(col_name in uniq.columns() for col_name in fk.columns):
+                if any(col_name in uniq.columns() for col_name in foreign_key.columns):
                     metadata += f"""
                     INSERT INTO _synql_uniqueness(field, tbl_index)
-                    VALUES({ids[(tbl, fk)]}, {ids[(tbl, uniq)]});
+                    VALUES({ids[(tbl, foreign_key)]}, {ids[(tbl, uniq)]});
                     """.rstrip()
-            foreign_tbl = tables[fk.foreign_table[0]]
-            referred_cols = sql.referred_columns(fk, tables)
+            foreign_tbl = tables[foreign_key.foreign_table[0]]
+            referred_cols = sql.referred_columns(foreign_key, tables)
             f_uniq = next(
                 f_uniq
                 for f_uniq in foreign_tbl.uniqueness()
@@ -314,9 +322,9 @@ def _synql_triggers(tables: sql.Symbols, conf: Config) -> str:
             metadata += f"""
             INSERT INTO _synql_fk(field, foreign_index, on_delete, on_update)
             VALUES(
-                {ids[(tbl, fk)]}, {ids[(foreign_tbl, f_uniq)]},
-                {FK_ACTION[normalize_fk_action(fk.on_delete, conf)]},
-                {FK_ACTION[normalize_fk_action(fk.on_update, conf)]}
+                {ids[(tbl, foreign_key)]}, {ids[(foreign_tbl, f_uniq)]},
+                {_FK_ACTION[_normalize_fk_action(foreign_key.on_delete, conf)]},
+                {_FK_ACTION[_normalize_fk_action(foreign_key.on_update, conf)]}
             );
             """
         log_updates = ""
@@ -346,27 +354,27 @@ def _synql_triggers(tables: sql.Symbols, conf: Config) -> str:
             """.strip()
         fklog_updates = ""
         fklog_insertions = ""
-        for fk in tbl.foreign_keys():
-            foreign_tbl_name = fk.foreign_table[0]
+        for foreign_key in tbl.foreign_keys():
+            foreign_tbl_name = foreign_key.foreign_table[0]
             foreign_tbl = tables[foreign_tbl_name]
-            referred_cols = sql.referred_columns(fk, tables)
+            referred_cols = sql.referred_columns(foreign_key, tables)
             old_referred_match = " AND ".join(
                 f'"{ref_col}" = OLD."{col}"'
-                for ref_col, col in zip(referred_cols, fk.columns)
+                for ref_col, col in zip(referred_cols, foreign_key.columns)
             )
             new_referred_match = " AND ".join(
                 f'"{ref_col}" = NEW."{col}"'
-                for ref_col, col in zip(referred_cols, fk.columns)
+                for ref_col, col in zip(referred_cols, foreign_key.columns)
             )
             null_ref_match = " AND ".join(
                 f'NEW."{col}" IS NULL'
-                for ref_col, col in zip(referred_cols, fk.columns)
+                for ref_col, col in zip(referred_cols, foreign_key.columns)
             )
             fklog_insertions += f"""
                 -- Handle case where at least one col is NULL
                 INSERT INTO _synql_fklog(ts, peer, row_ts, row_peer, field, foreign_row_ts, foreign_row_peer)
                 SELECT
-                    local.ts, local.peer, local.ts, local.peer, {ids[(tbl, fk)]},
+                    local.ts, local.peer, local.ts, local.peer, {ids[(tbl, foreign_key)]},
                     target.row_ts, target.row_peer
                 FROM _synql_local AS local LEFT JOIN (
                     SELECT row_ts, row_peer FROM "_synql_id_{foreign_tbl_name}"
@@ -380,7 +388,7 @@ def _synql_triggers(tables: sql.Symbols, conf: Config) -> str:
                 -- Handle case where at least one col is NULL
                 INSERT INTO _synql_fklog(ts, peer, row_ts, row_peer, field, foreign_row_ts, foreign_row_peer)
                 SELECT
-                    local.ts, local.peer, cur.row_ts, cur.row_peer, {ids[(tbl, fk)]},
+                    local.ts, local.peer, cur.row_ts, cur.row_peer, {ids[(tbl, foreign_key)]},
                     target.row_ts, target.row_peer
                 FROM _synql_local AS local, (
                     SELECT * FROM "_synql_id_{tbl_name}" WHERE rowid = NEW.rowid
@@ -396,7 +404,7 @@ def _synql_triggers(tables: sql.Symbols, conf: Config) -> str:
                     SELECT 1 FROM (
                         SELECT foreign_row_ts, foreign_row_peer FROM _synql_fklog
                         WHERE row_ts = cur.row_ts AND row_peer = cur.row_peer AND
-                            field = {ids[(tbl, fk)]}
+                            field = {ids[(tbl, foreign_key)]}
                         ORDER BY ts, peer LIMIT 1
                     )
                     WHERE foreign_row_ts = target.row_ts AND foreign_row_peer = target.row_peer
@@ -461,27 +469,27 @@ def _synql_triggers(tables: sql.Symbols, conf: Config) -> str:
     return result.strip()
 
 
-def _get_schema(db: sqlite3.Connection) -> str:
+def _get_schema(db: sqlite3.Connection, /) -> str:
     with closing(db.cursor()) as cursor:
-        cursor.execute(_SELECT_AR_TABLE_SCHEMA)
+        cursor.execute(_SELECT_USER_TABLE_SCHEMA)
         result = ";".join(r[0] for r in cursor) + ";"
     return result
 
 
-def _allocate_id(db: sqlite3.Connection, /, *, id: int | None = None) -> None:
+def _allocate_id(db: sqlite3.Connection, /, *, replica_id: int | None = None) -> None:
     with closing(db.cursor()) as cursor:
-        if id is None:
+        if replica_id is None:
             # Generate an identifier with 48 bits of entropy
-            cursor.execute(f"UPDATE _synql_local SET peer = (random() >> 16);")
+            cursor.execute("UPDATE _synql_local SET peer = (random() >> 16);")
         else:
-            cursor.execute(f"UPDATE _synql_local SET peer = {id};")
+            cursor.execute(f"UPDATE _synql_local SET peer = {replica_id};")
         cursor.execute(
             "INSERT INTO _synql_context(peer, ts) SELECT peer, 0 FROM _synql_local;"
         )
 
 
 def init(
-    db: sqlite3.Connection, /, *, id: int | None = None, conf: Config = Config()
+    db: sqlite3.Connection, /, *, replica_id: int | None = None, conf: Config = Config()
 ) -> None:
     sql_ar_schema = _get_schema(db)
     tables = sql.symbols(parse_schema(sql_ar_schema))
@@ -493,8 +501,8 @@ def init(
         )
         cursor.executescript(_synql_triggers(tables, conf))
         if not conf.physical_clock:
-            cursor.execute(f"DROP TRIGGER _synql_local_clock;")
-    _allocate_id(db, id=id)
+            cursor.execute("DROP TRIGGER _synql_local_clock;")
+    _allocate_id(db, replica_id=replica_id)
 
 
 def fingerprint(db: sqlite3.Connection, fp_path: pathlib.Path | str, /) -> None:
@@ -516,7 +524,7 @@ def delta(
     /,
 ) -> None:
     db.commit()
-    with sqlite3.connect(delta_path) as delta, closing(delta.cursor()) as cursor:
+    with sqlite3.connect(delta_path) as delta_db, closing(delta_db.cursor()) as cursor:
         cursor.executescript(_CREATE_TABLE_CONTEXT + _CREATE_REPLICATION_TABLES)
     script = f"""
     ATTACH DATABASE '{fp_path}' AS fp;
@@ -528,14 +536,18 @@ def delta(
 
 
 def clone_to(
-    db: sqlite3.Connection, target: sqlite3.Connection, /, *, id: int | None = None
+    source: sqlite3.Connection,
+    target: sqlite3.Connection,
+    /,
+    *,
+    replica_id: int | None = None,
 ) -> None:
-    db.commit()
-    db.backup(target)
-    _allocate_id(target, id=id)
+    source.commit()
+    source.backup(target)
+    _allocate_id(target, replica_id=replica_id)
 
 
-def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str) -> None:
+def pull_from(db: sqlite3.Connection, remote_db_path: pathlib.Path | str, /) -> None:
     sql_ar_schema = _get_schema(db)
     tables = sql.symbols(parse_schema(sql_ar_schema))
     merging = _create_pull(tables)
@@ -598,7 +610,7 @@ ON CONFLICT DO UPDATE SET ul = excluded.ul, ts = excluded.ts, peer = excluded.pe
 WHERE ul < excluded.ul;
 """
 
-_CONFLICT_RESOLUTION = f"""
+_CONFLICT_RESOLUTION = """
 -- A. ON UPDATE RESTRICT
 -- undo all concurrent updates to a restrict ref
 INSERT OR REPLACE INTO _synql_undolog(ts, peer, obj_peer, obj_ts, ul)
@@ -725,7 +737,7 @@ WHERE _synql_context.peer = local.peer;
 """
 
 
-def _create_pull(tables: sql.Symbols) -> str:
+def _create_pull(tables: sql.Symbols, /) -> str:
     result = ""
     merger = ""
     ids = utils.ids(tables)
@@ -742,20 +754,21 @@ def _create_pull(tables: sql.Symbols) -> str:
                 ORDER BY log.ts DESC, log.peer DESC LIMIT 1
             ) AS "{col.name}"'''
             ]
-        for fk in tbl.foreign_keys():
-            f_tbl = tables[fk.foreign_table[0]]
-            for col_name in fk.columns:
+        for foreign_key in tbl.foreign_keys():
+            for col_name in foreign_key.columns:
                 if col_name not in col_names:
                     col_names += [col_name]
                     selector = f"""
                     SELECT fklog.* FROM _synql_fklog_extra AS fklog
-                    WHERE fklog.field = {ids[(tbl, fk)]} AND fklog.ul%2 = 0 AND
+                    WHERE fklog.field = {ids[(tbl, foreign_key)]} AND fklog.ul%2 = 0 AND
                         fklog.row_peer = id.row_peer AND fklog.row_ts = id.row_ts AND
                         fklog.row_ul%2 = 0
                     ORDER BY fklog.ts DESC, fklog.peer DESC LIMIT 1
                     """
-                    referred_tbl = tables[fk.foreign_table[0]]
-                    for referred in sql.resolve_foreign_key(fk, col_name, tables):
+                    referred_tbl = tables[foreign_key.foreign_table[0]]
+                    for referred in sql.resolve_foreign_key(
+                        foreign_key, col_name, tables
+                    ):
                         if isinstance(referred, sql.ForeignKey):
                             selector = f"""
                             SELECT fklog2.* FROM (

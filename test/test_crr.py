@@ -1,14 +1,12 @@
 # Copyright (c) 2022 Inria, Victorien Elvinger
 # Licensed under the MIT License (https://mit-license.org/)
 
-import pysqlite3 as sqlite3
-import typing
-from contextlib import closing
-from synql import crr
+"""Unit tests."""
+
 import pathlib
-from sqlschm import sql
-from dataclasses import dataclass
-from test_utils import exec, fetch, crr_from, Val, Undo, Crr
+import pysqlite3 as sqlite3
+from test_utils import execute, crr_from, Val, Undo, Crr
+from synql import crr
 
 
 _DEFAULT_CONF = crr.Config(physical_clock=False)
@@ -16,7 +14,7 @@ _DEFAULT_CONF = crr.Config(physical_clock=False)
 
 def test_crr_init(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
         assert crr_from(a) == Crr(
             tbls={},
             ctx={1: 0},
@@ -26,18 +24,18 @@ def test_crr_init(tmp_path: pathlib.Path) -> None:
 
 def test_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x integer PRIMARY KEY)")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
 
-        exec(a, "INSERT INTO X VALUES(1)")
+        execute(a, "INSERT INTO X VALUES(1)")
         assert crr_from(a) == Crr(
             tbls={"X": {(1, (1, 1))}},
             ctx={1: 1},
             log=set(),
         )
 
-        exec(a, "UPDATE X SET x = 2")
+        execute(a, "UPDATE X SET x = 2")
         assert crr_from(a) == Crr(
             tbls={"X": {(2, (1, 1))}},
             ctx={1: 1},
@@ -45,65 +43,65 @@ def test_aliased_rowid(tmp_path: pathlib.Path) -> None:
         )
 
         # Test rowid aliases (rowid, _rowid_, oid)
-        exec(a, "UPDATE X SET rowid = 3")
+        execute(a, "UPDATE X SET rowid = 3")
         assert crr_from(a) == Crr(
             tbls={"X": {(3, (1, 1))}},
             ctx={1: 1},
             log=set(),
         )
 
-        exec(a, "UPDATE X SET _rowid_ = 4")
+        execute(a, "UPDATE X SET _rowid_ = 4")
         assert crr_from(a) == Crr(
             tbls={"X": {(4, (1, 1))}},
             ctx={1: 1},
             log=set(),
         )
 
-        exec(a, "UPDATE X SET oid = 5")
+        execute(a, "UPDATE X SET oid = 5")
         assert crr_from(a) == Crr(
             tbls={"X": {(5, (1, 1))}},
             ctx={1: 1},
             log=set(),
         )
 
-        exec(a, "DELETE FROM X")
+        execute(a, "DELETE FROM X")
         assert crr_from(a) == Crr(
             tbls={"X": set()},
             ctx={1: 2},
             log={Undo(ts=(2, 1), obj=(1, 1), ul=1)},
         )
 
-        exec(a, "INSERT INTO X VALUES(1)")
-        exec(a, "INSERT OR REPLACE INTO X VALUES(1)")
+        execute(a, "INSERT INTO X VALUES(1)")
+        execute(a, "INSERT OR REPLACE INTO X VALUES(1)")
         assert crr_from(a) == Crr(
             tbls={"X": {(1, (5, 1))}},
             ctx={1: 5},
             log={Undo(ts=(4, 1), obj=(3, 1), ul=1), Undo(ts=(2, 1), obj=(1, 1), ul=1)},
         )
 
-        exec(a, "INSERT INTO X VALUES(1) ON CONFLICT(x) DO UPDATE SET x = 2")
+        execute(a, "INSERT INTO X VALUES(1) ON CONFLICT(x) DO UPDATE SET x = 2")
         assert crr_from(a) == Crr(
             tbls={"X": {(2, (5, 1))}},
             ctx={1: 5},
             log={Undo(ts=(4, 1), obj=(3, 1), ul=1), Undo(ts=(2, 1), obj=(1, 1), ul=1)},
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x integer PRIMARY KEY AUTOINCREMENT, v text)")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x integer PRIMARY KEY AUTOINCREMENT, v text)")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
 
-        exec(a, "INSERT INTO X(v) VALUES('v1')")
+        execute(a, "INSERT INTO X(v) VALUES('v1')")
         assert crr_from(a) == Crr(
             tbls={"X": {(1, "v1", (1, 1))}},
             ctx={1: 1},
             log={Val(ts=(1, 1), row=(1, 1), name="v", val="v1")},
         )
 
-        exec(a, "UPDATE X SET v = 'v2'")
+        execute(a, "UPDATE X SET v = 'v2'")
         assert crr_from(a) == Crr(
             tbls={"X": {(1, "v2", (1, 1))}},
             ctx={1: 2},
@@ -112,23 +110,23 @@ def test_repl_col(tmp_path: pathlib.Path) -> None:
                 Val(ts=(2, 1), row=(1, 1), name="v", val="v2"),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_repl_pk(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x int PRIMARY KEY)")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
 
-        exec(a, "INSERT INTO X VALUES(1)")
+        execute(a, "INSERT INTO X VALUES(1)")
         assert crr_from(a) == Crr(
             tbls={"X": {(1, (1, 1))}},
             ctx={1: 1},
             log={Val(ts=(1, 1), row=(1, 1), name="x", val=1)},
         )
 
-        exec(a, "INSERT INTO X VALUES(1) ON CONFLICT(x) DO UPDATE SET x = 2")
+        execute(a, "INSERT INTO X VALUES(1) ON CONFLICT(x) DO UPDATE SET x = 2")
         assert crr_from(a) == Crr(
             tbls={"X": {(2, (1, 1))}},
             ctx={1: 2},
@@ -137,21 +135,21 @@ def test_repl_pk(tmp_path: pathlib.Path) -> None:
                 Val(ts=(2, 1), row=(1, 1), name="x", val=2),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x integer PRIMARY KEY)")
+        execute(
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x))",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
 
-        exec(a, "INSERT INTO X VALUES(1)")
-        exec(a, "INSERT INTO Y VALUES(1, 1)")
+        execute(a, "INSERT INTO X VALUES(1)")
+        execute(a, "INSERT INTO Y VALUES(1, 1)")
         assert crr_from(a) == Crr(
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 1))}},
             ctx={1: 2},
@@ -160,8 +158,8 @@ def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
             },
         )
 
-        exec(a, "INSERT INTO X VALUES(2)")
-        exec(a, "UPDATE Y SET x = 2")
+        execute(a, "INSERT INTO X VALUES(2)")
+        execute(a, "UPDATE Y SET x = 2")
 
         assert crr_from(a) == Crr(
             tbls={"X": {(1, (1, 1)), (2, (3, 1))}, "Y": {(1, 2, (2, 1))}},
@@ -171,20 +169,20 @@ def test_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
                 Val(ts=(4, 1), row=(2, 1), name="fk", val=(3, 1)),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_fk_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x int PRIMARY KEY)")
+        execute(
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x))",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        exec(a, "INSERT INTO Y VALUES(1, 1)")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        execute(a, "INSERT INTO Y VALUES(1, 1)")
 
         assert crr_from(a) == Crr(
             tbls={
@@ -198,8 +196,8 @@ def test_fk_repl_col(tmp_path: pathlib.Path) -> None:
             },
         )
 
-        exec(a, "INSERT INTO X VALUES(2)")
-        exec(a, "UPDATE Y SET x = 2")
+        execute(a, "INSERT INTO X VALUES(2)")
+        execute(a, "UPDATE Y SET x = 2")
 
         assert crr_from(a) == Crr(
             tbls={
@@ -214,23 +212,28 @@ def test_fk_repl_col(tmp_path: pathlib.Path) -> None:
                 Val(ts=(4, 1), row=(2, 1), name="fk", val=(3, 1)),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_fk_repl_multi_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(
             a,
             "CREATE TABLE X(x integer PRIMARY KEY, x1 integer, x2 integer, UNIQUE(x1,x2))",
         )
-        exec(
+        execute(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x1 integer, x2 integer, CONSTRAINT fk FOREIGN KEY(x1,x2) REFERENCES X(x1, x2))",
+            """CREATE TABLE Y(
+                y integer PRIMARY KEY,
+                x1 integer,
+                x2 integer,
+                CONSTRAINT fk FOREIGN KEY(x1,x2) REFERENCES X(x1, x2)
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1, 2, 3)")
-        exec(a, "INSERT INTO Y VALUES(1, 2, 3)")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1, 2, 3)")
+        execute(a, "INSERT INTO Y VALUES(1, 2, 3)")
 
         assert crr_from(a) == Crr(
             tbls={
@@ -249,8 +252,8 @@ def test_fk_repl_multi_col(tmp_path: pathlib.Path) -> None:
             },
         )
 
-        exec(a, "INSERT INTO X VALUES(2, 3, 4)")
-        exec(a, "UPDATE Y SET x1 = 3, x2 = 4")
+        execute(a, "INSERT INTO X VALUES(2, 3, 4)")
+        execute(a, "UPDATE Y SET x1 = 3, x2 = 4")
 
         assert crr_from(a) == Crr(
             tbls={
@@ -272,21 +275,24 @@ def test_fk_repl_multi_col(tmp_path: pathlib.Path) -> None:
                 Val(ts=(4, 1), row=(2, 1), name="fk", val=(3, 1)),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_fk_up_cascade(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x int PRIMARY KEY)")
+        execute(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE CASCADE)",
+            """CREATE TABLE Y(
+                y integer PRIMARY KEY,
+                x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE CASCADE
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        exec(a, "INSERT INTO Y VALUES(1, 1)")
-        exec(a, "UPDATE X SET x=2")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        execute(a, "INSERT INTO Y VALUES(1, 1)")
+        execute(a, "UPDATE X SET x=2")
 
         assert crr_from(a) == Crr(
             tbls={"X": {(2, (1, 1))}, "Y": {(1, 2, (2, 1))}},
@@ -297,21 +303,24 @@ def test_fk_up_cascade(tmp_path: pathlib.Path) -> None:
                 Val(ts=(4, 1), row=(1, 1), name="x", val=2),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_fk_up_set_null(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x int PRIMARY KEY)")
+        execute(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE SET NULL)",
+            """CREATE TABLE Y(
+                y integer PRIMARY KEY,
+                x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE SET NULL
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        exec(a, "INSERT INTO Y VALUES(1, 1)")
-        exec(a, "UPDATE X SET x=2")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        execute(a, "INSERT INTO Y VALUES(1, 1)")
+        execute(a, "UPDATE X SET x=2")
 
         assert crr_from(a) == Crr(
             tbls={"X": {(2, (1, 1))}, "Y": {(1, None, (2, 1))}},
@@ -322,17 +331,17 @@ def test_fk_up_set_null(tmp_path: pathlib.Path) -> None:
                 Val(ts=(4, 1), row=(1, 1), name="x", val=2),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_clone_to(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
-        exec(a, "PRAGMA foreign_keys=ON")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        execute(a, "PRAGMA foreign_keys=ON")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
 
-        crr.clone_to(a, b, id=2)
+        crr.clone_to(a, b, replica_id=2)
         assert crr_from(b) == Crr(tbls={}, ctx={1: 0, 2: 0}, log=set())
 
 
@@ -340,10 +349,10 @@ def test_pull_from(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
-        exec(a, "PRAGMA foreign_keys=ON")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
+        execute(a, "PRAGMA foreign_keys=ON")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
 
-        crr.clone_to(a, b, id=2)
+        crr.clone_to(a, b, replica_id=2)
         crr.pull_from(b, tmp_path / "a.db")
         assert crr_from(b) == Crr(tbls={}, ctx={1: 0, 2: 0}, log=set())
 
@@ -352,12 +361,12 @@ def test_pull_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x integer PRIMARY KEY);")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        crr.clone_to(a, b, id=2)
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x integer PRIMARY KEY);")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, replica_id=2)
 
-        exec(a, "INSERT INTO X VALUES(1)")
+        execute(a, "INSERT INTO X VALUES(1)")
         crr.pull_from(b, tmp_path / "a.db")
         assert crr_from(b) == Crr(
             tbls={"X": {(1, (1, 1))}},
@@ -365,7 +374,7 @@ def test_pull_aliased_rowid(tmp_path: pathlib.Path) -> None:
             log=set(),
         )
 
-        exec(a, "UPDATE X SET x = 2")
+        execute(a, "UPDATE X SET x = 2")
         crr.pull_from(b, tmp_path / "a.db")
         assert crr_from(b) == Crr(
             tbls={"X": {(1, (1, 1))}},  # x does not change on b
@@ -373,26 +382,26 @@ def test_pull_aliased_rowid(tmp_path: pathlib.Path) -> None:
             log=set(),
         )
 
-        exec(a, "DELETE FROM X")
+        execute(a, "DELETE FROM X")
         crr.pull_from(b, tmp_path / "a.db")
         assert crr_from(b) == Crr(
             tbls={"X": set()},
             ctx={1: 2, 2: 0},
             log={Undo(ts=(2, 1), obj=(1, 1), ul=1)},
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_pull_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x integer PRIMARY KEY AUTOINCREMENT, v text)")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        crr.clone_to(a, b, id=2)
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x integer PRIMARY KEY AUTOINCREMENT, v text)")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, replica_id=2)
 
-        exec(a, "INSERT INTO X(v) VALUES('v1')")
+        execute(a, "INSERT INTO X(v) VALUES('v1')")
         crr.pull_from(b, tmp_path / "a.db")
         assert crr_from(b) == Crr(
             tbls={"X": {(1, "v1", (1, 1))}},
@@ -400,7 +409,7 @@ def test_pull_repl_col(tmp_path: pathlib.Path) -> None:
             log={Val(ts=(1, 1), row=(1, 1), name="v", val="v1")},
         )
 
-        exec(a, "UPDATE X SET v = 'v2'")
+        execute(a, "UPDATE X SET v = 'v2'")
         crr.pull_from(b, tmp_path / "a.db")
         assert crr_from(b) == Crr(
             tbls={"X": {(1, "v2", (1, 1))}},
@@ -410,24 +419,24 @@ def test_pull_repl_col(tmp_path: pathlib.Path) -> None:
                 Val(ts=(2, 1), row=(1, 1), name="v", val="v2"),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_pull_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x integer PRIMARY KEY)")
+        execute(
             a,
             "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x))",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        crr.clone_to(a, b, id=2)
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, replica_id=2)
 
-        exec(a, "INSERT INTO X VALUES(1)")
-        exec(a, "INSERT INTO Y VALUES(1, 1)")
+        execute(a, "INSERT INTO X VALUES(1)")
+        execute(a, "INSERT INTO Y VALUES(1, 1)")
         crr.pull_from(b, tmp_path / "a.db")
         assert crr_from(b) == Crr(
             tbls={"X": {(1, (1, 1))}, "Y": {(1, 1, (2, 1))}},
@@ -437,8 +446,8 @@ def test_pull_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
             },
         )
 
-        exec(a, "INSERT INTO X VALUES(2)")
-        exec(a, "UPDATE Y SET x = 2")
+        execute(a, "INSERT INTO X VALUES(2)")
+        execute(a, "UPDATE Y SET x = 2")
         crr.pull_from(b, tmp_path / "a.db")
         assert crr_from(b) == Crr(
             tbls={
@@ -456,23 +465,23 @@ def test_pull_fk_aliased_rowid(tmp_path: pathlib.Path) -> None:
                 Val(ts=(4, 1), row=(2, 1), name="fk", val=(3, 1)),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_pull_fk_fk(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
-        exec(a, "CREATE TABLE Y(y integer PRIMARY KEY CONSTRAINT fk1 REFERENCES X)")
-        exec(a, "CREATE TABLE Z(z integer PRIMARY KEY CONSTRAINT fk2 REFERENCES Y)")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        crr.clone_to(a, b, id=2)
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x int PRIMARY KEY)")
+        execute(a, "CREATE TABLE Y(y integer PRIMARY KEY CONSTRAINT fk1 REFERENCES X)")
+        execute(a, "CREATE TABLE Z(z integer PRIMARY KEY CONSTRAINT fk2 REFERENCES Y)")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, replica_id=2)
 
-        exec(a, "INSERT INTO X VALUES(1)")
-        exec(a, "INSERT INTO Y VALUES(1)")
-        exec(a, "INSERT INTO Z VALUES(1)")
+        execute(a, "INSERT INTO X VALUES(1)")
+        execute(a, "INSERT INTO Y VALUES(1)")
+        execute(a, "INSERT INTO Z VALUES(1)")
         crr.pull_from(b, tmp_path / "a.db")
         assert crr_from(b) == Crr(
             tbls={
@@ -493,19 +502,19 @@ def test_pull_fk_fk(tmp_path: pathlib.Path) -> None:
                 Val(ts=(3, 1), row=(3, 1), name="fk2", val=(2, 1)),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_ins_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(rowid integer PRIMARY KEY);")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        crr.clone_to(a, b, id=2)
-        exec(a, "INSERT INTO X VALUES(1)")
-        exec(b, "INSERT INTO X VALUES(1)")
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(rowid integer PRIMARY KEY);")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "INSERT INTO X VALUES(1)")
+        execute(b, "INSERT INTO X VALUES(1)")
 
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
@@ -530,19 +539,19 @@ def test_concur_ins_aliased_rowid(tmp_path: pathlib.Path) -> None:
             ctx={1: 1, 2: 1},
             log=set(),
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_ins_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(v text PRIMARY KEY);")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        crr.clone_to(a, b, id=2)
-        exec(a, "INSERT INTO X VALUES('a1')")
-        exec(b, "INSERT INTO X VALUES('b1')")
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(v text PRIMARY KEY);")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "INSERT INTO X VALUES('a1')")
+        execute(b, "INSERT INTO X VALUES('b1')")
 
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
@@ -560,8 +569,8 @@ def test_concur_ins_repl_col(tmp_path: pathlib.Path) -> None:
         )
 
         crr.pull_from(b, tmp_path / "a.db")
-        exec(a, "UPDATE X SET v = 'a2' WHERE v = 'a1'")
-        exec(b, "UPDATE X SET v = 'b2' WHERE v = 'a1'")
+        execute(a, "UPDATE X SET v = 'a2' WHERE v = 'a1'")
+        execute(b, "UPDATE X SET v = 'b2' WHERE v = 'a1'")
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
             tbls={
@@ -578,19 +587,19 @@ def test_concur_ins_repl_col(tmp_path: pathlib.Path) -> None:
                 Val(ts=(3, 2), row=(1, 1), name="v", val="b2"),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(v text PRIMARY KEY);")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        crr.clone_to(a, b, id=2)
-        exec(a, "INSERT INTO X VALUES('v1')")
-        exec(b, "INSERT INTO X VALUES('v1')")
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(v text PRIMARY KEY);")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "INSERT INTO X VALUES('v1')")
+        execute(b, "INSERT INTO X VALUES('v1')")
         b.backup(b_bak)
 
         crr.pull_from(b, tmp_path / "a.db")
@@ -614,19 +623,19 @@ def test_conflicting_keys(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(2, 1), obj=(1, 2), ul=1),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_unique_nulls(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x integer PRIMARY KEY AUTOINCREMENT, v int UNIQUE);")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        crr.clone_to(a, b, id=2)
-        exec(a, "INSERT INTO X(v) VALUES(NULL)")
-        exec(b, "INSERT INTO X(v) VALUES(NULL)")
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x integer PRIMARY KEY AUTOINCREMENT, v int UNIQUE);")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "INSERT INTO X(v) VALUES(NULL)")
+        execute(b, "INSERT INTO X(v) VALUES(NULL)")
         b.backup(b_bak)
 
         crr.pull_from(b, tmp_path / "a.db")
@@ -648,21 +657,21 @@ def test_unique_nulls(tmp_path: pathlib.Path) -> None:
                 Val(ts=(1, 2), row=(1, 2), name="v", val=None),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_multi_col_conflicting_keys(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(a integer, b integer, PRIMARY KEY(a, b));")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        crr.clone_to(a, b, id=2)
-        exec(a, "INSERT INTO X VALUES(1, 2)")
-        exec(a, "INSERT INTO X VALUES(1, 3)")
-        exec(b, "INSERT INTO X VALUES(1, 2)")
-        exec(b, "INSERT INTO X VALUES(1, 4)")
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(a integer, b integer, PRIMARY KEY(a, b));")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "INSERT INTO X VALUES(1, 2)")
+        execute(a, "INSERT INTO X VALUES(1, 3)")
+        execute(b, "INSERT INTO X VALUES(1, 2)")
+        execute(b, "INSERT INTO X VALUES(1, 4)")
         b.backup(b_bak)
 
         crr.pull_from(b, tmp_path / "a.db")
@@ -698,19 +707,21 @@ def test_multi_col_conflicting_keys(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(3, 1), obj=(1, 2), ul=1),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_multi_col_multi_covering_unique(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(a int, b int, c int, PRIMARY KEY(a,b), UNIQUE(b,c));")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        crr.clone_to(a, b, id=2)
-        exec(a, "INSERT INTO X VALUES(1, 2, 3)")
-        exec(b, "INSERT INTO X VALUES(1, 4, 3)")
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(
+            a, "CREATE TABLE X(a int, b int, c int, PRIMARY KEY(a,b), UNIQUE(b,c));"
+        )
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "INSERT INTO X VALUES(1, 2, 3)")
+        execute(b, "INSERT INTO X VALUES(1, 4, 3)")
         b.backup(b_bak)
 
         crr.pull_from(b, tmp_path / "a.db")
@@ -740,21 +751,21 @@ def test_multi_col_multi_covering_unique(tmp_path: pathlib.Path) -> None:
                 Val(ts=(1, 2), row=(1, 2), name="c", val=3),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_conflicting_unique_fk(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x int PRIMARY KEY);")
-        exec(a, "CREATE TABLE Y(x int CONSTRAINT fk REFERENCES X(x) PRIMARY KEY);")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        crr.clone_to(a, b, id=2)
-        exec(a, "INSERT INTO Y VALUES(1)")
-        exec(b, "INSERT INTO Y VALUES(1)")
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x int PRIMARY KEY);")
+        execute(a, "CREATE TABLE Y(x int CONSTRAINT fk REFERENCES X(x) PRIMARY KEY);")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "INSERT INTO Y VALUES(1)")
+        execute(b, "INSERT INTO Y VALUES(1)")
         b.backup(b_bak)
 
         crr.pull_from(b, tmp_path / "a.db")
@@ -780,25 +791,25 @@ def test_conflicting_unique_fk(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(3, 1), obj=(2, 2), ul=1),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_multi_col_fk_multi_covering_unique(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x int PRIMARY KEY);")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x int PRIMARY KEY);")
+        execute(
             a,
             "CREATE TABLE Y(y int PRIMARY KEY, x int CONSTRAINT fk REFERENCES X(x), UNIQUE(y, x));",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        crr.clone_to(a, b, id=2)
-        exec(a, "INSERT INTO Y VALUES(1, 1)")
-        exec(b, "INSERT INTO Y VALUES(1, 1)")
-        exec(b, "INSERT INTO Y VALUES(2, 1)")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "INSERT INTO Y VALUES(1, 1)")
+        execute(b, "INSERT INTO Y VALUES(1, 1)")
+        execute(b, "INSERT INTO Y VALUES(2, 1)")
         b.backup(b_bak)
 
         crr.pull_from(b, tmp_path / "a.db")
@@ -832,20 +843,20 @@ def test_multi_col_fk_multi_covering_unique(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(4, 1), obj=(2, 2), ul=1),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_past_conflicting_keys(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(v text PRIMARY KEY);")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        crr.clone_to(a, b, id=2)
-        exec(a, "INSERT INTO X VALUES('v1')")
-        exec(a, "UPDATE X SET v = 'v2'")
-        exec(b, "INSERT INTO X VALUES('v1')")
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(v text PRIMARY KEY);")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "INSERT INTO X VALUES('v1')")
+        execute(a, "UPDATE X SET v = 'v2'")
+        execute(b, "INSERT INTO X VALUES('v1')")
         b.backup(b_bak)
 
         crr.pull_from(b, tmp_path / "a.db")
@@ -869,20 +880,20 @@ def test_past_conflicting_keys(tmp_path: pathlib.Path) -> None:
                 Val(ts=(1, 2), row=(1, 2), name="v", val="v1"),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "b.bak.db") as b_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(u text PRIMARY KEY, v text UNIQUE);")
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        crr.clone_to(a, b, id=2)
-        exec(a, "INSERT INTO X VALUES('u1', 'v1')")
-        exec(a, "INSERT INTO X VALUES('u2', 'v2')")
-        exec(b, "INSERT INTO X VALUES('u1', 'v2')")
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(u text PRIMARY KEY, v text UNIQUE);")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "INSERT INTO X VALUES('u1', 'v1')")
+        execute(a, "INSERT INTO X VALUES('u2', 'v2')")
+        execute(b, "INSERT INTO X VALUES('u1', 'v2')")
         b.backup(b_bak)
 
         crr.pull_from(b, tmp_path / "a.db")
@@ -916,25 +927,28 @@ def test_conflicting_3keys(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(3, 1), obj=(2, 1), ul=1),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_del_fk_restrict_aliased_rowid(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x integer PRIMARY KEY)")
+        execute(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT)",
+            """CREATE TABLE Y(
+                y integer PRIMARY KEY,
+                x integer CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        crr.clone_to(a, b, id=2)
-        exec(a, "DELETE FROM X")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "DELETE FROM X")
         a.backup(a_bak)
-        exec(b, "INSERT INTO Y VALUES(1, 1)")
+        execute(b, "INSERT INTO Y VALUES(1, 1)")
 
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
@@ -955,27 +969,30 @@ def test_concur_del_fk_restrict_aliased_rowid(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(3, 2), obj=(1, 1), ul=2),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_past_del_fk_restrict(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x integer PRIMARY KEY)")
+        execute(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT)",
+            """CREATE TABLE Y(
+                y integer PRIMARY KEY,
+                x integer CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        crr.clone_to(a, b, id=2)
-        exec(a, "DELETE FROM X")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "DELETE FROM X")
         a.backup(a_bak)
-        exec(b, "INSERT INTO Y VALUES(1, 1)")
-        exec(b, "INSERT INTO X VALUES(2)")
-        exec(b, "UPDATE Y SET x = 2")
+        execute(b, "INSERT INTO Y VALUES(1, 1)")
+        execute(b, "INSERT INTO X VALUES(2)")
+        execute(b, "UPDATE Y SET x = 2")
 
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
@@ -998,25 +1015,28 @@ def test_concur_past_del_fk_restrict(tmp_path: pathlib.Path) -> None:
                 Val(ts=(4, 2), row=(2, 2), name="fk", val=(3, 2)),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x int PRIMARY KEY)")
+        execute(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT)",
+            """CREATE TABLE Y(
+                y integer PRIMARY KEY,
+                x integer CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        crr.clone_to(a, b, id=2)
-        exec(a, "DELETE FROM X")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "DELETE FROM X")
         a.backup(a_bak)
-        exec(b, "INSERT INTO Y VALUES(1, 1)")
+        execute(b, "INSERT INTO Y VALUES(1, 1)")
 
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
@@ -1039,30 +1059,36 @@ def test_concur_del_fk_restrict_repl_pk(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(3, 2), obj=(1, 1), ul=2),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_del_fk_restrict_rec(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x integer PRIMARY KEY)")
+        execute(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk1 REFERENCES X(x) ON DELETE CASCADE)",
+            """CREATE TABLE Y(
+                y integer PRIMARY KEY,
+                x integer CONSTRAINT fk1 REFERENCES X(x) ON DELETE CASCADE
+            )""",
         )
-        exec(
+        execute(
             a,
-            "CREATE TABLE Z(z integer PRIMARY KEY, y integer CONSTRAINT fk2 REFERENCES Y(y) ON DELETE RESTRICT)",
+            """CREATE TABLE Z(
+                z integer PRIMARY KEY,
+                y integer CONSTRAINT fk2 REFERENCES Y(y) ON DELETE RESTRICT
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        crr.clone_to(a, b, id=2)
-        exec(a, "DELETE FROM X")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "DELETE FROM X")
         a.backup(a_bak)
-        exec(b, "INSERT INTO Y VALUES(1, 1)")
-        exec(b, "INSERT INTO Z VALUES(1, 1)")
+        execute(b, "INSERT INTO Y VALUES(1, 1)")
+        execute(b, "INSERT INTO Z VALUES(1, 1)")
 
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
@@ -1085,25 +1111,28 @@ def test_concur_del_fk_restrict_rec(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(4, 2), obj=(1, 1), ul=2),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_del_fk_cascade(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x integer PRIMARY KEY)")
+        execute(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON DELETE CASCADE)",
+            """CREATE TABLE Y(
+                y integer PRIMARY KEY,
+                x integer CONSTRAINT fk REFERENCES X(x) ON DELETE CASCADE
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        crr.clone_to(a, b, id=2)
-        exec(a, "DELETE FROM X")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "DELETE FROM X")
         a.backup(a_bak)
-        exec(b, "INSERT INTO Y VALUES(1, 1)")
+        execute(b, "INSERT INTO Y VALUES(1, 1)")
 
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
@@ -1126,25 +1155,28 @@ def test_concur_del_fk_cascade(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(3, 2), obj=(2, 2), ul=1),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_del_fk_set_null(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x integer PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x integer PRIMARY KEY)")
+        execute(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X ON DELETE SET NULL)",
+            """CREATE TABLE Y(
+                y integer PRIMARY KEY,
+                x integer CONSTRAINT fk REFERENCES X ON DELETE SET NULL
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        crr.clone_to(a, b, id=2)
-        exec(a, "DELETE FROM X")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "DELETE FROM X")
         a.backup(a_bak)
-        exec(b, "INSERT INTO Y VALUES(1, 1)")
+        execute(b, "INSERT INTO Y VALUES(1, 1)")
 
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
@@ -1165,27 +1197,30 @@ def test_concur_del_fk_set_null(tmp_path: pathlib.Path) -> None:
                 Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_del_fk_set_null_repl_col(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x int PRIMARY KEY)")
+        execute(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x int CONSTRAINT fk REFERENCES X ON DELETE SET NULL)",
+            """CREATE TABLE Y(
+                y integer PRIMARY KEY,
+                x int CONSTRAINT fk REFERENCES X ON DELETE SET NULL
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        crr.clone_to(a, b, id=2)
-        exec(a, "DELETE FROM X")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "DELETE FROM X")
         a.backup(a_bak)
-        exec(b, "INSERT INTO Y VALUES(1, 1)")
+        execute(b, "INSERT INTO Y VALUES(1, 1)")
 
-        exec(a, "PRAGMA foreign_keys=OFF")
+        execute(a, "PRAGMA foreign_keys=OFF")
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
             tbls={"X": set(), "Y": {(1, None, (2, 2))}},
@@ -1207,25 +1242,28 @@ def test_concur_del_fk_set_null_repl_col(tmp_path: pathlib.Path) -> None:
                 Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_up_fk_restrict(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x int PRIMARY KEY)")
+        execute(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE RESTRICT)",
+            """CREATE TABLE Y(
+                y integer PRIMARY KEY,
+                x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE RESTRICT
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        crr.clone_to(a, b, id=2)
-        exec(a, "UPDATE X SET x=2")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "UPDATE X SET x=2")
         a.backup(a_bak)
-        exec(b, "INSERT INTO Y VALUES(1, 1)")
+        execute(b, "INSERT INTO Y VALUES(1, 1)")
 
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
@@ -1250,26 +1288,29 @@ def test_concur_up_fk_restrict(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(3, 2), obj=(2, 1), ul=1),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_up2_fk_restrict(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x int PRIMARY KEY)")
+        execute(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE RESTRICT)",
+            """CREATE TABLE Y(
+                y integer PRIMARY KEY,
+                x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE RESTRICT
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        crr.clone_to(a, b, id=2)
-        exec(a, "UPDATE X SET x=2")
-        exec(a, "UPDATE X SET x=3")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "UPDATE X SET x=2")
+        execute(a, "UPDATE X SET x=3")
         a.backup(a_bak)
-        exec(b, "INSERT INTO Y VALUES(1, 1)")
+        execute(b, "INSERT INTO Y VALUES(1, 1)")
 
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
@@ -1298,25 +1339,28 @@ def test_concur_up2_fk_restrict(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(4, 2), obj=(3, 1), ul=1),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_up_fk_cascade(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x int PRIMARY KEY)")
+        execute(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE CASCADE)",
+            """CREATE TABLE Y(
+                y integer PRIMARY KEY,
+                x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE CASCADE
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        crr.clone_to(a, b, id=2)
-        exec(a, "UPDATE X SET x=2")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "UPDATE X SET x=2")
         a.backup(a_bak)
-        exec(b, "INSERT INTO Y VALUES(1, 1)")
+        execute(b, "INSERT INTO Y VALUES(1, 1)")
 
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
@@ -1339,25 +1383,28 @@ def test_concur_up_fk_cascade(tmp_path: pathlib.Path) -> None:
                 Val(ts=(2, 2), row=(2, 2), name="fk", val=(1, 1)),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_up_fk_set_null(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x int PRIMARY KEY)")
+        execute(
             a,
-            "CREATE TABLE Y(y integer PRIMARY KEY, x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE SET NULL)",
+            """CREATE TABLE Y(
+                y integer PRIMARY KEY,
+                x integer CONSTRAINT fk REFERENCES X(x) ON UPDATE SET NULL
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        crr.clone_to(a, b, id=2)
-        exec(a, "UPDATE X SET x=2")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "UPDATE X SET x=2")
         a.backup(a_bak)
-        exec(b, "INSERT INTO Y VALUES(1, 1)")
+        execute(b, "INSERT INTO Y VALUES(1, 1)")
 
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
@@ -1382,27 +1429,29 @@ def test_concur_up_fk_set_null(tmp_path: pathlib.Path) -> None:
                 Val(ts=(4, 2), row=(2, 2), name="fk", val=(None, None)),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE X(x int PRIMARY KEY)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE X(x int PRIMARY KEY)")
+        execute(
             a,
-            "CREATE TABLE Y(x int PRIMARY KEY CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT ON UPDATE CASCADE)",
+            """CREATE TABLE Y(
+                x int PRIMARY KEY CONSTRAINT fk REFERENCES X(x) ON DELETE RESTRICT ON UPDATE CASCADE
+            )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO X VALUES(1)")
-        crr.clone_to(a, b, id=2)
-        exec(a, "UPDATE X SET x=2")
-        exec(a, "DELETE FROM X")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO X VALUES(1)")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "UPDATE X SET x=2")
+        execute(a, "DELETE FROM X")
         a.backup(a_bak)
-        exec(b, "INSERT INTO Y(x) VALUES(1)")
-        exec(b, "INSERT INTO X VALUES(2)")
+        execute(b, "INSERT INTO Y(x) VALUES(1)")
+        execute(b, "INSERT INTO X VALUES(2)")
 
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
@@ -1431,20 +1480,22 @@ def test_concur_complex_1(tmp_path: pathlib.Path) -> None:
                 Undo(ts=(4, 2), obj=(3, 2), ul=1),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_concur_complex_2(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a, sqlite3.connect(
         tmp_path / "b.db"
     ) as b, sqlite3.connect(tmp_path / "a.bak.db") as a_bak:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, "CREATE TABLE book(id integer PRIMARY KEY AUTOINCREMENT, name text)")
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, "CREATE TABLE book(id integer PRIMARY KEY AUTOINCREMENT, name text)")
+        execute(
             a, "CREATE TABLE publisher(id integer PRIMARY KEY AUTOINCREMENT, name text)"
         )
-        exec(a, "CREATE TABLE store(id integer PRIMARY KEY AUTOINCREMENT, name text)")
-        exec(
+        execute(
+            a, "CREATE TABLE store(id integer PRIMARY KEY AUTOINCREMENT, name text)"
+        )
+        execute(
             a,
             """CREATE TABLE published_book(
                 book_id integer CONSTRAINT book_fk REFERENCES book,
@@ -1452,7 +1503,7 @@ def test_concur_complex_2(tmp_path: pathlib.Path) -> None:
                 PRIMARY KEY(book_id, publisher_id)
             )""",
         )
-        exec(
+        execute(
             a,
             """CREATE TABLE availability(
                 book_id integer,
@@ -1460,20 +1511,21 @@ def test_concur_complex_2(tmp_path: pathlib.Path) -> None:
                 store_id integer CONSTRAINT store_fk REFERENCES store,
                 count integer,
                 PRIMARY KEY(book_id, publisher_id, store_id),
-                CONSTRAINT published_book_fk FOREIGN KEY(book_id, publisher_id) REFERENCES published_book
+                CONSTRAINT published_book_fk FOREIGN KEY(book_id, publisher_id)
+                    REFERENCES published_book
             )""",
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, "INSERT INTO book(name) VALUES ('B1'), ('B2')")
-        exec(a, "INSERT INTO publisher(name) VALUES ('P1'), ('P2')")
-        crr.clone_to(a, b, id=2)
-        exec(a, "INSERT INTO store(name) VALUES('S1')")
-        exec(a, "INSERT INTO published_book VALUES(1, 1)")
-        exec(a, "INSERT INTO availability VALUES(1, 1, 1, 4)")
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, "INSERT INTO book(name) VALUES ('B1'), ('B2')")
+        execute(a, "INSERT INTO publisher(name) VALUES ('P1'), ('P2')")
+        crr.clone_to(a, b, replica_id=2)
+        execute(a, "INSERT INTO store(name) VALUES('S1')")
+        execute(a, "INSERT INTO published_book VALUES(1, 1)")
+        execute(a, "INSERT INTO availability VALUES(1, 1, 1, 4)")
         a.backup(a_bak)
-        exec(b, "INSERT INTO store(name) VALUES('S2')")
-        exec(b, "INSERT INTO published_book VALUES(1, 2)")
-        exec(b, "INSERT INTO availability VALUES(1, 2, 1, 5)")
+        execute(b, "INSERT INTO store(name) VALUES('S2')")
+        execute(b, "INSERT INTO published_book VALUES(1, 2)")
+        execute(b, "INSERT INTO availability VALUES(1, 2, 1, 5)")
 
         crr.pull_from(a, tmp_path / "b.db")
         assert crr_from(a) == Crr(
@@ -1534,20 +1586,20 @@ def test_concur_complex_2(tmp_path: pathlib.Path) -> None:
                 Val(ts=(7, 2), row=(7, 2), name="count", val=5),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")
 
 
 def test_spaced_names(tmp_path: pathlib.Path) -> None:
     with sqlite3.connect(tmp_path / "a.db") as a:
-        exec(a, "PRAGMA foreign_keys=ON")
-        exec(a, 'CREATE TABLE "X "("x " int PRIMARY KEY)')
-        exec(
+        execute(a, "PRAGMA foreign_keys=ON")
+        execute(a, 'CREATE TABLE "X "("x " int PRIMARY KEY)')
+        execute(
             a,
             'CREATE TABLE "Y "("x " int PRIMARY KEY CONSTRAINT fk REFERENCES "X "("x "))',
         )
-        crr.init(a, id=1, conf=_DEFAULT_CONF)
-        exec(a, 'INSERT INTO "X " VALUES(1)')
-        exec(a, 'INSERT INTO "Y "("x ") VALUES(1)')
+        crr.init(a, replica_id=1, conf=_DEFAULT_CONF)
+        execute(a, 'INSERT INTO "X " VALUES(1)')
+        execute(a, 'INSERT INTO "Y "("x ") VALUES(1)')
         assert crr_from(a) == Crr(
             tbls={"X ": {(1, (1, 1))}, "Y ": {(1, (2, 1))}},
             ctx={1: 2},
@@ -1556,4 +1608,4 @@ def test_spaced_names(tmp_path: pathlib.Path) -> None:
                 Val(ts=(2, 1), row=(2, 1), name="fk", val=(1, 1)),
             },
         )
-        exec(a, "PRAGMA integrity_check")
+        execute(a, "PRAGMA integrity_check")

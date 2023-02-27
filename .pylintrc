@@ -1,0 +1,11 @@
+[MASTER]
+# Whitelisting pysqlite3 C extension
+extension-pkg-allow-list=pysqlite3
+
+[BASIC]
+# Common variable names
+# a, b: in testing for replica A, replica B
+# db: database
+# ts: timestamp
+# ul: undo-length
+good-names=a, b, db, ts, ul
