@@ -35,7 +35,13 @@ You can also lint the project thanks to [pylint](https://pylint.org/):
 poetry run pylint synql
 ```
 
+## Dependencies
+
 The project depends on _pysqlite3-binary_ in order to use the same version of sqlite3 in local and in CI.
+We had [to define](stubs/pysqlite3/__init__.pyi) a [stub](https://mypy.readthedocs.io/en/stable/stubs.html) for _pysqlite3_ to get types.
+Because it shares the same API as _sqlite3_, we just had to export the stub of _sqlite3_.
+
+_sqlschm_ allow parsing SQLite schemas.
 
 ## Commit messages
 
