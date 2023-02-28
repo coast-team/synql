@@ -8,4 +8,31 @@ extension-pkg-allow-list=pysqlite3
 # db: database
 # ts: timestamp
 # ul: undo-length
-good-names=a, b, db, ts, ul
+good-names=a,b,db,ts,ul
+
+[STRING]
+check-quote-consistency=yes
+
+[VARIABLES]
+# Tells whether we should check for unused import in __init__ files.
+init-import=no
+
+[MESSAGES CONTROL]
+disable=consider-merging-isinstance, # this rule is incompatible with mypy
+        fixme, # allow FIXME doc tags
+        line-too-long, # we use black for formatting
+        missing-class-docstring,
+        missing-function-docstring,
+        missing-module-docstring,
+        too-few-public-methods,
+        too-many-ancestors,
+        too-many-arguments,
+        too-many-boolean-expressions,
+        too-many-branches,
+        too-many-instance-attributes,
+        too-many-lines,
+        too-many-locals,
+        too-many-nested-blocks,
+        too-many-public-methods,
+        too-many-return-statements,
+        too-many-statements,

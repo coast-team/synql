@@ -126,7 +126,7 @@ def delta(
     db.commit()
     with sqlite3.connect(delta_path) as delta_db, closing(delta_db.cursor()) as cursor:
         cursor.executescript(_CREATE_TABLE_CONTEXT + _CREATE_REPLICATION_TABLES)
-    script = f"""
+    _script = f"""
     ATTACH DATABASE '{fp_path}' AS fp;
     ATTACH DATABASE '{delta_path}' AS delta;
     INSERT INTO extern._synql_context SELECT * FROM _synql_context;
