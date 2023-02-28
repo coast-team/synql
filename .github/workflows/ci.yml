@@ -19,3 +19,4 @@ jobs:
             - run: poetry run mypy synql
             - run: poetry run pytest
             - run: poetry run black --check .
+            - run: poetry run pylint synql test
