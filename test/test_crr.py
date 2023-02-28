@@ -5,9 +5,8 @@
 
 import pathlib
 import pysqlite3 as sqlite3
-from test_utils import execute, crr_from, Val, Undo, Crr
 from synql import crr
-
+from .test_utils import execute, crr_from, Val, Undo, Crr
 
 # We disable physical clock in order to get deterministic logical timestamps.
 # In this case, every clock corresponds to the latest seen clock incremented by 1.
